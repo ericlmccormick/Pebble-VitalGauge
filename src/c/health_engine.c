@@ -4,6 +4,7 @@
 #define HISTORY_CHUNKS (1440 / CHUNK_SIZE)
 #define VG_SNAPSHOT_KEY 520
 #define VG_SNAPSHOT_VERSION 1
+#define VG_SNAPSHOT_CHUNK 192
 typedef struct {
     uint16_t version;
     uint16_t size;
@@ -18,9 +19,14 @@ typedef struct {
 } VGHealthSnapshot;
 static VGHealthSnapshot s_snapshot;
 static void restore_snapshot(void) {
-    if (persist_get_size(VG_SNAPSHOT_KEY) != (int)sizeof(s_snapshot)) return;
-    if (persist_read_data(VG_SNAPSHOT_KEY, &s_snapshot, sizeof(s_snapshot)) !=
-        (int)sizeof(s_snapshot)) return;
+    uint8_t *dest = (uint8_t *)&s_snapshot;
+    for (size_t pos = 0; pos < sizeof(s_snapshot); pos += VG_SNAPSHOT_CHUNK) {
+        size_t len = sizeof(s_snapshot) - pos;
+        if (len > VG_SNAPSHOT_CHUNK) len = VG_SNAPSHOT_CHUNK;
+        int key = VG_SNAPSHOT_KEY + (int)(pos / VG_SNAPSHOT_CHUNK);
+        if (persist_get_size(key) != (int)len ||
+            persist_read_data(key, dest + pos, len) != (int)len) return;
+    }
     if (s_snapshot.version != VG_SNAPSHOT_VERSION ||
         s_snapshot.size != sizeof(s_snapshot)) return;
     memcpy(g_act_map, s_snapshot.activity, sizeof(g_act_map));
@@ -57,7 +63,13 @@ static void save_snapshot(void) {
     s_snapshot.exertion = g_exertion_comp;
     s_snapshot.stress_drain = g_stress_comp;
     s_snapshot.sleep_available = g_sleep_data_available;
-    persist_write_data(VG_SNAPSHOT_KEY, &s_snapshot, sizeof(s_snapshot));
+    const uint8_t *data = (const uint8_t *)&s_snapshot;
+    for (size_t pos = 0; pos < sizeof(s_snapshot); pos += VG_SNAPSHOT_CHUNK) {
+        size_t len = sizeof(s_snapshot) - pos;
+        if (len > VG_SNAPSHOT_CHUNK) len = VG_SNAPSHOT_CHUNK;
+        persist_write_data(VG_SNAPSHOT_KEY + (int)(pos / VG_SNAPSHOT_CHUNK),
+                           data + pos, len);
+    }
 }
 
 // ============================================================================

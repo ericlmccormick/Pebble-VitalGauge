@@ -729,8 +729,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
                                GTextAlignmentCenter, NULL);
         }
         // Establish layout grid for lower statistics column
-        int y_start = 88;
-        int y_step = 22; int x_sq = 45; int x_txt = 65;
+        int y_start = 100;
+        int y_step = 20; int x_sq = 45; int x_txt = 65;
         GFont row_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
 
         // Render peak statistics row

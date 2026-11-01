@@ -183,7 +183,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
                 // Retrieve the sleep state for this minute
                 uint8_t state = g_sleep_map[minute_of_day];
                 // Assign DukeBlue for deep, PictonBlue for light, Red for awake
-                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : GColorRed);
+                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : ((state == 3) ? GColorJaegerGreen : GColorRed));
                 // Map the minute sequence mathematically to the physical perimeter
                 int p = (m * max_p) / total_sleep_mins;
 
@@ -234,7 +234,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     snprintf(top_buf, sizeof(top_buf), "Sleep: %d | Ready: %d\n%s - %s\nMorn HR: %d BPM", 
              g_sleep_comp, g_readiness_comp, sleep_start_str, sleep_end_str, g_morning_hr_comp);
     // Draw the formatted top readout block
-    graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+    if (!g_sleep_data_available) snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\\nCheck Pebble Health sync");\n    graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
                        GRect(0, 38, 200, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Calculate total net sleep in seconds

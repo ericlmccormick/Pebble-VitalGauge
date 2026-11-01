@@ -218,6 +218,36 @@ void health_engine_update_buffers() {
                 (long)chunk_start, (long)chunk_end,
                 (unsigned long)fetched, chunk_valid);
     }
+    // Independent short-range probes: distinguish an entirely empty minute
+    // history API from missing older overnight records. A zero return makes
+    // output timestamps undefined; log requested times and count only.
+    {
+        HealthMinuteData probe[60];
+        time_t probe_end = now - 15 * 60;
+        time_t probe_start = probe_end - 60 * 60;
+        uint32_t found = health_service_get_minute_history(
+            probe, 60, &probe_start, &probe_end);
+        int valid = 0;
+        for (uint32_t i = 0; i < found; ++i) {
+            if (!probe[i].is_invalid) ++valid;
+        }
+        APP_LOG(APP_LOG_LEVEL_INFO,
+                "MINUTE_PROBE recent_15_to_75_min_ago returned=%lu valid=%d",
+                (unsigned long)found, valid);
+        if (g_sleep_start > 0) {
+            time_t night_start = g_sleep_start + 30 * 60;
+            time_t night_end = night_start + 60 * 60;
+            uint32_t night_found = health_service_get_minute_history(
+                probe, 60, &night_start, &night_end);
+            int night_valid = 0;
+            for (uint32_t i = 0; i < night_found; ++i) {
+                if (!probe[i].is_invalid) ++night_valid;
+            }
+            APP_LOG(APP_LOG_LEVEL_INFO,
+                    "MINUTE_PROBE first_sleep_hour returned=%lu valid=%d",
+                    (unsigned long)night_found, night_valid);
+        }
+    }
     // Rebuild the entire night from minute data. Native Pebble sessions are
     // anchors, not the final authority. Orientation changes are deliberately
     // ignored: an arm hanging off the bed is not evidence of getting up.

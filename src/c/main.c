@@ -46,8 +46,10 @@ static void health_event_cb(HealthEventType event, void *context) {
     }
     if (event != HealthEventSleepUpdate &&
         event != HealthEventSignificantUpdate) return;
+    // The pending initial sync already includes sleep and significant updates.
+    if (s_initial_sync_timer) return;
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
-    s_health_refresh_timer = app_timer_register(750, health_refresh_cb, NULL);
+    s_health_refresh_timer = app_timer_register(2500, health_refresh_cb, NULL);
 }
 
 static void initial_sync_timer_cb(void *data) {

@@ -5,6 +5,11 @@
 // ============================================================================
 static Window *s_hub_window;
 static Layer *s_hub_drawing_layer;
+static Window *s_recovery_window;
+static Layer *s_recovery_layer;
+static bool s_show_morning;
+
+static void recovery_open(void);
 
 // ============================================================================
 // --- SECTION 2: TOUCH & CLICK ROUTING ---
@@ -28,7 +33,7 @@ static void screen_touch_tap_handler(GPoint tapped_coordinate) {
     play_haptic_tick();
 
     if (((tapped_coordinate.x - center_x) * (tapped_coordinate.x - center_x) + (tapped_coordinate.y - center_y) * (tapped_coordinate.y - center_y)) <= (35 * 35)) { 
-        ui_battery_push(); 
+        recovery_open(); 
         return; 
     } 
     if (tapped_coordinate.x < center_x && tapped_coordinate.y < center_y) ui_stress_push();
@@ -125,6 +130,60 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
 }
 
 
+// Energy / recovery detail area. The center of the existing rings is its
+// entry point; Up/Down switches pages and Back returns to the dashboard.
+static void recovery_draw(Layer *layer, GContext *ctx) {
+    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
+    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+    char text[196];
+    if (s_show_morning) {
+        int days = 0;
+        int baseline = ui_stress_hrv_baseline(&days);
+        int last = ui_stress_latest_hrv();
+        snprintf(text, sizeof(text),
+            "Morning Recovery\n\nSleep %d/100\nReady %d/100\nRest HR %d BPM\nHRV %s\n%d / 7 days",
+            g_sleep_comp, g_readiness_comp, g_morning_hr_comp,
+            baseline ? "calibrated" : (last ? "collecting" : "unavailable"),
+            days);
+    } else {
+        int active = (int)health_service_sum_today(HealthMetricActiveKCalories);
+        int stress = persist_exists(PERSIST_KEY_SCORE) ?
+                     persist_read_int(PERSIST_KEY_SCORE) : 0;
+        snprintf(text, sizeof(text),
+            "Energy Reserve\n\n% d / 100\nSleep %d   Ready %d\nActivity %d kcal\nStress score %d\n\nUp/Down: Switch",
+            g_live_energy_score, g_sleep_comp, g_readiness_comp, active, stress);
+    }
+    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                       GRect(8, 8, 184, 208), GTextOverflowModeWordWrap,
+                       GTextAlignmentCenter, NULL);
+}
+static void recovery_switch(ClickRecognizerRef recognizer, void *context) {
+    s_show_morning = !s_show_morning;
+    if (s_recovery_layer) layer_mark_dirty(s_recovery_layer);
+}
+static void recovery_clicks(void *context) {
+    window_single_click_subscribe(BUTTON_ID_UP, recovery_switch);
+    window_single_click_subscribe(BUTTON_ID_DOWN, recovery_switch);
+    window_single_click_subscribe(BUTTON_ID_SELECT, recovery_switch);
+}
+static void recovery_load(Window *window) {
+    s_recovery_layer = layer_create(layer_get_bounds(window_get_root_layer(window)));
+    layer_set_update_proc(s_recovery_layer, recovery_draw);
+    layer_add_child(window_get_root_layer(window), s_recovery_layer);
+    window_set_click_config_provider(window, recovery_clicks);
+}
+static void recovery_unload(Window *window) {
+    layer_destroy(s_recovery_layer);
+    s_recovery_layer = NULL;
+}
+static void recovery_open(void) {
+    time_t now = time(NULL);
+    s_show_morning = g_sleep_end > 0 && now >= g_sleep_end &&
+                     now - g_sleep_end < 2 * 3600;
+    window_stack_push(s_recovery_window, true);
+}
+
 // ============================================================================
 // --- SECTION 4: HUB LIFECYCLE ---
 // ============================================================================
@@ -140,6 +199,9 @@ static void hub_window_unload(Window *w) {
 }
 
 void ui_hub_init() {
+    s_recovery_window = window_create();
+    window_set_window_handlers(s_recovery_window, (WindowHandlers){
+        .load = recovery_load, .unload = recovery_unload });
     s_hub_window = window_create();
     window_set_window_handlers(s_hub_window, (WindowHandlers){ .load = hub_window_load, .unload = hub_window_unload });
     touch_service_subscribe(global_touch_handler, NULL);
@@ -147,6 +209,7 @@ void ui_hub_init() {
 
 void ui_hub_deinit() {
     touch_service_unsubscribe();
+    window_destroy(s_recovery_window);
     window_destroy(s_hub_window);
 }
 

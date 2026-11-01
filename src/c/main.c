@@ -79,9 +79,7 @@ static void init(void) {
     app_worker_launch();
 
     if (launch_reason() == APP_LAUNCH_WORKER) {
-        ui_hub_push(false);
-        health_engine_log_metrics();
-        window_stack_pop_all(false);
+        ui_stress_start_automatic();
     } else {
         ui_hub_push(true);
         app_timer_register(500, initial_sync_timer_cb, NULL);

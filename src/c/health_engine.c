@@ -227,45 +227,65 @@ void health_engine_update_buffers() {
                 ++rejected_minutes;
             }
         }
-        // Recover later sleep up to six hours beyond native sleep end,
-        // constrained to an overnight window and never extending past now.
-        // Require 20/25 consecutive minutes of low motion, at least 20 samples.
+        // Recover post-awakening sleep only with continuous supporting evidence.
+        // Quiet movement by itself is NOT evidence of sleep: waking quietly in bed
+        // must not extend the sleep interval indefinitely.
         int cutoff = last_native + 360;
         if (cutoff > 1439) cutoff = 1439;
-        for (int i = last_native + 1; i <= cutoff; ++i) {
-            time_t when = g_24h_start + (time_t)i * 60;
-            struct tm *local = localtime(&when);
-            if (!local || (local->tm_hour >= 11 && local->tm_hour < 20))
-                break; // Do not convert ordinary daytime inactivity to sleep.
-            if (i + 25 > 1440 || i + 25 > cutoff + 1) break;
-            int good = 0, observed = 0, active = 0, hr_count = 0, hr_sum = 0;
-            for (int j = i; j < i + 25; ++j) {
-                if (!s_valid_motion[j]) continue;
-                ++observed;
-                if (s_quiet_motion[j]) ++good;
-                else ++active;
-                if (s_minute_hr[j] > 0) { hr_sum += s_minute_hr[j]; ++hr_count; }
+        int last_accepted = last_native;
+        int wake_evidence = 0;
+        int baseline_sum = 0, baseline_count = 0;
+        for (int i = first_native; i <= last_native; ++i) {
+            if (s_native_sleep_mask[i] && s_minute_hr[i] >= 35 &&
+                s_minute_hr[i] <= 110) {
+                baseline_sum += s_minute_hr[i];
+                ++baseline_count;
             }
-            // The watch cannot reliably infer sleep from no HR or no movement
-            // records; require HR coverage as supporting evidence.
-            if (observed < 20 || good < 20 || active > 5 || hr_count < 12) continue;
-            int avg_hr = hr_sum / hr_count;
-            if (avg_hr < 35 || avg_hr > 95) continue;
-            // Restrict candidate to immediately after a native anchor/accepted
-            // estimate; awake gaps up to 90 minutes are allowed.
-            int prev = i - 1;
-            while (prev >= last_native && !g_sleep_map[prev] &&
-                   !s_native_sleep_mask[prev]) --prev;
-            if (i - prev > 90) break;
-            // Mark the sustained quiet period, not the preceding wake gap.
-            for (int j = i; j < i + 25; ++j) {
-                if (s_valid_motion[j] && s_quiet_motion[j] &&
-                    !s_native_sleep_mask[j]) {
-                    g_sleep_map[j] = 3; // estimated sleep, not confirmed restful
-                    ++inferred_minutes;
+        }
+        // Without a credible sleeping HR baseline, skip inferred sleep.
+        if (baseline_count >= 20) {
+            int baseline_hr = baseline_sum / baseline_count;
+            for (int i = last_native + 1; i <= cutoff; ++i) {
+                time_t when = g_24h_start + (time_t)i * 60;
+                struct tm local_tm = *localtime(&when);
+                // Recovery allowed during the night and early morning only.
+                if (local_tm.tm_hour >= 11 && local_tm.tm_hour < 20) break;
+                if (!s_valid_motion[i]) {
+                    ++wake_evidence;
+                } else if (!s_quiet_motion[i] ||
+                           (s_minute_hr[i] > baseline_hr + 18 &&
+                            s_minute_hr[i] > 75)) {
+                    wake_evidence += 2;
+                } else if (wake_evidence > 0) {
+                    --wake_evidence;
                 }
+                // Stop after sustained waking/missing-data evidence.
+                if (wake_evidence >= 12) break;
+                if (i - last_accepted > 90) break;
+                if (i + 25 > cutoff + 1) break;
+                int observed = 0, quiet = 0, good_hr = 0;
+                for (int j = i; j < i + 25; ++j) {
+                    if (!s_valid_motion[j]) continue;
+                    ++observed;
+                    if (s_quiet_motion[j]) ++quiet;
+                    if (s_minute_hr[j] >= 35 &&
+                        s_minute_hr[j] <= baseline_hr + 12) ++good_hr;
+                }
+                // Require a sustained candidate with sleep-like HR, not simply
+                // lying motionless. Skip uncertain/awake minutes.
+                if (observed < 22 || quiet < 22 || good_hr < 18) continue;
+                for (int j = i; j < i + 25; ++j) {
+                    if (s_valid_motion[j] && s_quiet_motion[j] &&
+                        s_minute_hr[j] >= 35 &&
+                        s_minute_hr[j] <= baseline_hr + 12 &&
+                        !s_native_sleep_mask[j] && !g_sleep_map[j]) {
+                        g_sleep_map[j] = 3;
+                        ++inferred_minutes;
+                        last_accepted = j;
+                    }
+                }
+                i += 24;
             }
-            i += 24;
         }
     }
     int native_sleep_minutes = 0, native_restful_minutes = 0;

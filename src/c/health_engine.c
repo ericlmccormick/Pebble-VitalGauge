@@ -110,7 +110,6 @@ static void update_history_arrays() {
 // Native activity intervals are the source of truth for sleep. The minute
 // history API may have gaps, so it must not determine whether sleep occurred.
 static uint8_t s_native_sleep_mask[1440];
-static time_t s_latest_sleep_end;
 static bool s_found_sleep;
 
 static bool find_latest_sleep_cb(HealthActivity activity, time_t start,
@@ -120,7 +119,6 @@ static bool find_latest_sleep_cb(HealthActivity activity, time_t start,
         s_found_sleep = true;
         g_sleep_start = start;
         g_sleep_end = end;
-        s_latest_sleep_end = end;
     } else if (end >= g_sleep_start - 90 * 60 && start <= g_sleep_end + 90 * 60) {
         if (start < g_sleep_start) g_sleep_start = start;
         if (end > g_sleep_end) g_sleep_end = end;

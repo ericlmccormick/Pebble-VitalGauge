@@ -6,7 +6,6 @@
 static AppTimer *s_health_refresh_timer;
 static bool s_health_subscribed;
 static AppTimer *s_initial_sync_timer;
-static bool s_initial_sync_complete;
 #define MORNING_SCAN_DAY_KEY 412
 #define HRV_WORKER_LAUNCH_CONTEXT_KEY 414
 #define HRV_REST_PENDING_KEY 416
@@ -48,7 +47,6 @@ static void health_event_cb(HealthEventType event, void *context) {
     if (event != HealthEventSleepUpdate &&
         event != HealthEventSignificantUpdate) return;
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
-    if (s_initial_sync_timer) app_timer_cancel(s_initial_sync_timer);
     s_health_refresh_timer = app_timer_register(750, health_refresh_cb, NULL);
 }
 
@@ -59,10 +57,8 @@ static void initial_sync_timer_cb(void *data) {
         return;
     }
     health_engine_update_buffers();
-    s_initial_sync_complete = true;
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
-    morning_scan_maybe_start();
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {

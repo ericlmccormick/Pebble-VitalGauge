@@ -75,6 +75,8 @@ static bool s_hrv_active;
 // Baseline uses only good manual scans, not elevated-HR auto-trigger scans.
 #define HRV_HISTORY_KEY 410
 #define HRV_HISTORY_CAP 16
+#define HRV_CALIBRATION_DAYS_KEY 413
+#define HRV_REST_PENDING_KEY 416
 #define HRV_QUALITY_MIN 40
 #define HRV_BASELINE_MIN 7
 typedef struct {
@@ -121,6 +123,7 @@ static int hrv_baseline_ms(int *eligible_count) {
         if (!better_same_day) good[count++] = r->rmssd;
     }
     *eligible_count = count;
+    persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
     if (count < HRV_BASELINE_MIN) return 0;
     for (int i = 1; i < count; ++i) {
         uint16_t v = good[i]; int j = i;
@@ -150,6 +153,7 @@ static void hrv_save_completed(int bpm) {
         .quality=quality, .automatic=s_scan_context};
     persist_write_data(HRV_HISTORY_KEY, s_hrv_history,
                        s_hrv_count_history * sizeof(HRVRecord));
+    if (s_scan_context == 2) persist_delete(HRV_REST_PENDING_KEY);
     APP_LOG(APP_LOG_LEVEL_INFO,
             "HRV completed RMSSD=%d quality=%d accepted=%d rejected=%d auto=%d",
             s_hrv_rmssd, quality, s_hrv_accepted_total, s_hrv_rejected, s_scan_context);
@@ -951,6 +955,8 @@ void ui_stress_init() {
             if (result == bytes) s_hrv_count_history = bytes / sizeof(HRVRecord);
         }
     }
+    int days = 0;
+    hrv_baseline_ms(&days); // Keep worker calibration state synchronized.
     s_stress_window = window_create();
     window_set_window_handlers(s_stress_window, (WindowHandlers){ .load = stress_view_load, .unload = stress_view_unload });
 }

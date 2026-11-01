@@ -26,6 +26,7 @@
 // ============================================================================
 extern int g_live_energy_score;
 extern int g_sleep_comp;
+extern bool g_sleep_data_available;
 extern int g_readiness_comp;
 extern int g_card_eff_comp;
 extern int g_exertion_comp;

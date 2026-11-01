@@ -2,6 +2,63 @@
 
 #define CHUNK_SIZE 60
 #define HISTORY_CHUNKS (1440 / CHUNK_SIZE)
+#define VG_SNAPSHOT_KEY 520
+#define VG_SNAPSHOT_VERSION 1
+typedef struct {
+    uint16_t version;
+    uint16_t size;
+    uint32_t timestamp;
+    uint16_t activity[144];
+    uint8_t stress[144];
+    uint8_t sleep[1440];
+    int32_t sleep_start, sleep_end;
+    int32_t deep, light, longest;
+    int16_t rhr, cardiac, exertion, stress_drain;
+    uint8_t sleep_available;
+} VGHealthSnapshot;
+static VGHealthSnapshot s_snapshot;
+static void restore_snapshot(void) {
+    if (persist_get_size(VG_SNAPSHOT_KEY) != (int)sizeof(s_snapshot)) return;
+    if (persist_read_data(VG_SNAPSHOT_KEY, &s_snapshot, sizeof(s_snapshot)) !=
+        (int)sizeof(s_snapshot)) return;
+    if (s_snapshot.version != VG_SNAPSHOT_VERSION ||
+        s_snapshot.size != sizeof(s_snapshot)) return;
+    memcpy(g_act_map, s_snapshot.activity, sizeof(g_act_map));
+    memcpy(g_stress_map, s_snapshot.stress, sizeof(g_stress_map));
+    memcpy(g_sleep_map, s_snapshot.sleep, sizeof(g_sleep_map));
+    // Maps are 24-hour rolling windows. Restore the original map origin,
+    // not the current time, until a fresh reconstruction is available.
+    g_24h_start = (time_t)s_snapshot.timestamp;
+    g_sleep_start = (time_t)s_snapshot.sleep_start;
+    g_sleep_end = (time_t)s_snapshot.sleep_end;
+    g_sleep_deep_sec = s_snapshot.deep;
+    g_sleep_light_sec = s_snapshot.light;
+    g_longest_sleep_duration = s_snapshot.longest;
+    g_morning_hr_comp = s_snapshot.rhr;
+    g_card_eff_comp = s_snapshot.cardiac;
+    g_exertion_comp = s_snapshot.exertion;
+    g_stress_comp = s_snapshot.stress_drain;
+    g_sleep_data_available = s_snapshot.sleep_available != 0;
+}
+static void save_snapshot(void) {
+    s_snapshot.version = VG_SNAPSHOT_VERSION;
+    s_snapshot.size = sizeof(s_snapshot);
+    s_snapshot.timestamp = (uint32_t)g_24h_start;
+    memcpy(s_snapshot.activity, g_act_map, sizeof(g_act_map));
+    memcpy(s_snapshot.stress, g_stress_map, sizeof(g_stress_map));
+    memcpy(s_snapshot.sleep, g_sleep_map, sizeof(g_sleep_map));
+    s_snapshot.sleep_start = (int32_t)g_sleep_start;
+    s_snapshot.sleep_end = (int32_t)g_sleep_end;
+    s_snapshot.deep = g_sleep_deep_sec;
+    s_snapshot.light = g_sleep_light_sec;
+    s_snapshot.longest = g_longest_sleep_duration;
+    s_snapshot.rhr = g_morning_hr_comp;
+    s_snapshot.cardiac = g_card_eff_comp;
+    s_snapshot.exertion = g_exertion_comp;
+    s_snapshot.stress_drain = g_stress_comp;
+    s_snapshot.sleep_available = g_sleep_data_available;
+    persist_write_data(VG_SNAPSHOT_KEY, &s_snapshot, sizeof(s_snapshot));
+}
 
 // ============================================================================
 // --- SECTION 1: GLOBAL STATE INSTANTIATION ---
@@ -395,6 +452,7 @@ void health_engine_update_buffers() {
         // stale data as though it was collected this morning.
     }
     health_engine_calculate_energy(); update_history_arrays();
+    if (valid_minute_records > 0) save_snapshot();
 }
 
 // ============================================================================
@@ -405,6 +463,7 @@ void health_engine_init() {
     if (persist_exists(PERSIST_KEY_ENERGY_RESERVE)) g_live_energy_score = persist_read_int(PERSIST_KEY_ENERGY_RESERVE);
     if (persist_exists(PERSIST_KEY_SLEEP_SCORE)) g_sleep_comp = persist_read_int(PERSIST_KEY_SLEEP_SCORE);
     if (persist_exists(PERSIST_KEY_READINESS)) g_readiness_comp = persist_read_int(PERSIST_KEY_READINESS);
+    restore_snapshot();
 }
 
 void health_engine_deinit() {

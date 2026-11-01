@@ -23,6 +23,7 @@ typedef struct {
     uint8_t sleep_available;
 } VGHealthSnapshot;
 static VGHealthSnapshot s_snapshot;
+static uint8_t s_minute_hr[1440];
 static uint16_t s_minute_steps[1440];
 static uint8_t s_minute_flags[1440]; // bit 1 valid, 2 quiet, 4 active
 static time_t s_last_sync;
@@ -197,7 +198,6 @@ static void update_history_arrays() {
 // ============================================================================
 // Native activity intervals anchor the overnight window; minute-level motion
 // drives the final classification when available.
-static uint8_t s_minute_hr[1440];
 static uint8_t s_native_sleep_mask[1440];
 // Avoid putting several kilobytes of sensor buffers on the Pebble app stack.
 static uint8_t s_valid_motion[1440];

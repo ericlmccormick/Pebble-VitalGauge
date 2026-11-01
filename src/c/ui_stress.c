@@ -93,8 +93,18 @@ static int hrv_baseline_ms(int *eligible_count) {
     time_t limit = time(NULL) - 30 * 86400;
     for (int i = 0; i < s_hrv_count_history; ++i) {
         HRVRecord *r = &s_hrv_history[i];
-        if (r->quality == 2 && !r->automatic && r->timestamp >= (uint32_t)limit)
-            good[count++] = r->rmssd;
+        if (r->quality == 2 && !r->automatic && r->timestamp >= (uint32_t)limit) {
+            bool already_recorded_day = false;
+            for (int j = i + 1; j < s_hrv_count_history; ++j) {
+                HRVRecord *newer = &s_hrv_history[j];
+                if (newer->quality == 2 && !newer->automatic &&
+                    newer->timestamp / 86400 == r->timestamp / 86400) {
+                    already_recorded_day = true;
+                    break;
+                }
+            }
+            if (!already_recorded_day) good[count++] = r->rmssd;
+        }
     }
     *eligible_count = count;
     if (count < HRV_BASELINE_MIN) return 0;
@@ -698,10 +708,26 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 
         // Format and render current score and live BPM
         char top_buf[64];
-        snprintf(top_buf, sizeof(top_buf), "Score: %d/100\nCurrent: %d BPM", score, live_bpm);
+        int days = 0;
+        int baseline = hrv_baseline_ms(&days);
+        snprintf(top_buf, sizeof(top_buf), "Score: %d/100  HR: %d\nHRV %s: %d/%d days",
+                 score, live_bpm, baseline ? "ready" : "calibrate",
+                 days, HRV_BASELINE_MIN);
         graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
                            GRect(0, 38, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
+        if (s_hrv_count_history > 0) {
+            HRVRecord *last = &s_hrv_history[s_hrv_count_history - 1];
+            char hrv_text[60];
+            snprintf(hrv_text, sizeof(hrv_text), "Last HRV %u ms  %s",
+                     (unsigned)last->rmssd,
+                     last->quality == 2 ? "Good" :
+                     last->quality == 1 ? "Fair" : "Poor");
+            graphics_draw_text(ctx, hrv_text,
+                               fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                               GRect(0, 78, 200, 19), GTextOverflowModeWordWrap,
+                               GTextAlignmentCenter, NULL);
+        }
         // Establish layout grid for lower statistics column
         int y_start = 88;
         int y_step = 22; int x_sq = 45; int x_txt = 65;

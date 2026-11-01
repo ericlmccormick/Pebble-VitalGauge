@@ -115,6 +115,9 @@ static uint8_t s_valid_motion[1440];
 static uint8_t s_quiet_motion[1440];
 static uint8_t s_minute_hr[1440];
 static uint8_t s_active_motion[1440];
+// Keep API buffers off the constrained Pebble app stack.
+static HealthMinuteData s_history_chunk[CHUNK_SIZE];
+static HealthMinuteData s_history_probe[60];
 static bool s_found_sleep;
 
 static bool find_latest_sleep_cb(HealthActivity activity, time_t start,
@@ -184,33 +187,33 @@ void health_engine_update_buffers() {
     memset(s_active_motion, 0, sizeof(s_active_motion));
     time_t rhr_window_end = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600);
     int m_hr = 999;
-    HealthMinuteData chunk[CHUNK_SIZE];
+
     int valid_minute_records = 0;
     int motion_records = 0;
     for (int c = 0; c < 6; c++) {
         time_t chunk_start = g_24h_start + (c * CHUNK_SIZE * 60), chunk_end = chunk_start + (CHUNK_SIZE * 60);
         time_t requested_start = chunk_start;
         time_t requested_end = chunk_end;
-        uint32_t fetched = health_service_get_minute_history(chunk, CHUNK_SIZE,
+        uint32_t fetched = health_service_get_minute_history(s_history_chunk, CHUNK_SIZE,
                                                                &chunk_start, &chunk_end);
         int chunk_valid = 0;
         for (uint32_t i = 0; i < fetched; i++) {
-            if (chunk[i].is_invalid) continue;
+            if (s_history_chunk[i].is_invalid) continue;
             ++valid_minute_records;
             ++chunk_valid;
             int slot = (int)((chunk_start + (time_t)i * 60 - g_24h_start) / 60);
             if (slot >= 0 && slot < 1440) {
                 s_valid_motion[slot] = 1;
-                s_minute_hr[slot] = chunk[i].heart_rate_bpm;
+                s_minute_hr[slot] = s_history_chunk[i].heart_rate_bpm;
                 // Original application used 15 steps and 350 VMC to exclude
                 // movement-heavy periods. Reuse those limits as a veto.
-                s_quiet_motion[slot] = chunk[i].steps <= 15 && chunk[i].vmc <= 350;
-                s_active_motion[slot] = (chunk[i].steps > 15 || chunk[i].vmc > 350);
+                s_quiet_motion[slot] = s_history_chunk[i].steps <= 15 && s_history_chunk[i].vmc <= 350;
+                s_active_motion[slot] = (s_history_chunk[i].steps > 15 || s_history_chunk[i].vmc > 350);
                 ++motion_records;
             }
             int min_of_day = (chunk_start + (i * 60) - g_24h_start) / 60, b = min_of_day / 10;
-            if (b >= 0 && b < 144) { g_act_map[b] += chunk[i].steps; if (chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = chunk[i].heart_rate_bpm; }
-            if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (chunk[i].heart_rate_bpm > 0 && chunk[i].vmc == 0 && chunk[i].heart_rate_bpm < m_hr) m_hr = chunk[i].heart_rate_bpm;
+            if (b >= 0 && b < 144) { g_act_map[b] += s_history_chunk[i].steps; if (s_history_chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = s_history_chunk[i].heart_rate_bpm; }
+            if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (s_history_chunk[i].heart_rate_bpm > 0 && s_history_chunk[i].vmc == 0 && s_history_chunk[i].heart_rate_bpm < m_hr) m_hr = s_history_chunk[i].heart_rate_bpm;
         }
         APP_LOG(APP_LOG_LEVEL_INFO,
                 "MINUTE_CHUNK %d req=%ld..%ld actual=%ld..%ld returned=%lu valid=%d",
@@ -222,14 +225,14 @@ void health_engine_update_buffers() {
     // history API from missing older overnight records. A zero return makes
     // output timestamps undefined; log requested times and count only.
     {
-        HealthMinuteData probe[60];
+
         time_t probe_end = now - 15 * 60;
         time_t probe_start = probe_end - 60 * 60;
         uint32_t found = health_service_get_minute_history(
-            probe, 60, &probe_start, &probe_end);
+            s_history_probe, 60, &probe_start, &probe_end);
         int valid = 0;
         for (uint32_t i = 0; i < found; ++i) {
-            if (!probe[i].is_invalid) ++valid;
+            if (!s_history_probe[i].is_invalid) ++valid;
         }
         APP_LOG(APP_LOG_LEVEL_INFO,
                 "MINUTE_PROBE recent_15_to_75_min_ago returned=%lu valid=%d",
@@ -238,10 +241,10 @@ void health_engine_update_buffers() {
             time_t night_start = g_sleep_start + 30 * 60;
             time_t night_end = night_start + 60 * 60;
             uint32_t night_found = health_service_get_minute_history(
-                probe, 60, &night_start, &night_end);
+                s_history_probe, 60, &night_start, &night_end);
             int night_valid = 0;
             for (uint32_t i = 0; i < night_found; ++i) {
-                if (!probe[i].is_invalid) ++night_valid;
+                if (!s_history_probe[i].is_invalid) ++night_valid;
             }
             APP_LOG(APP_LOG_LEVEL_INFO,
                     "MINUTE_PROBE first_sleep_hour returned=%lu valid=%d",

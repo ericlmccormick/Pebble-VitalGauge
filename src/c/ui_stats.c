@@ -180,7 +180,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
                 // Retrieve the sleep state for this minute
                 uint8_t state = g_sleep_map[minute_of_day];
                 // Assign DukeBlue for deep, PictonBlue for light, Red for awake
-                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : ((state == 3) ? GColorJaegerGreen : GColorRed));
+                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : ((state == 3) ? GColorPictonBlue : GColorRed));
                 // Map the minute sequence mathematically to the physical perimeter
                 int p = (m * max_p) / total_sleep_mins;
 

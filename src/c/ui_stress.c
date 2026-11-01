@@ -677,6 +677,24 @@ static void start_breathing_session() {
     if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
 }
 
+static void start_stress_scan(bool automatic) {
+    if (s_is_scanning || s_is_breathing) return;
+    s_show_breath_summary = false;
+    s_is_scanning = true;
+    hrv_begin();
+    if (s_ekg_layer) layer_set_hidden(s_ekg_layer, false);
+    s_scan_ticks = 60;
+    memset(s_bpm_samples, 0, sizeof(s_bpm_samples));
+    health_service_set_heart_rate_sample_period(1);
+    if (g_backlight_stay_on) light_enable(true);
+    if (!s_unified_timer)
+        s_unified_timer = app_timer_register(1000, unified_timer_callback, NULL);
+    if (!s_ekg_timer)
+        s_ekg_timer = app_timer_register(50, ekg_update_timer, NULL);
+    if (!automatic && g_haptic_level > 0) vibes_short_pulse();
+    if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
+}
+
 static void stress_select_handler(ClickRecognizerRef recognizer, void *context) { 
     if (s_show_breath_summary) {
         s_show_breath_summary = false;
@@ -689,16 +707,7 @@ static void stress_select_handler(ClickRecognizerRef recognizer, void *context) 
         if (s_radius_animation) { animation_unschedule(s_radius_animation); s_radius = 20; }
         if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
     } else {
-        s_is_scanning = true;
-        hrv_begin();
-        if (s_ekg_layer) layer_set_hidden(s_ekg_layer, false);
-        s_scan_ticks = 60; memset(s_bpm_samples, 0, sizeof(s_bpm_samples));
-        health_service_set_heart_rate_sample_period(1);
-        if (g_backlight_stay_on) light_enable(true);
-        if (!s_unified_timer) s_unified_timer = app_timer_register(1000, unified_timer_callback, NULL);
-        if (!s_ekg_timer) s_ekg_timer = app_timer_register(50, ekg_update_timer, NULL);
-        if (g_haptic_level > 0) vibes_short_pulse();
-        if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
+        start_stress_scan(false);
     } 
 }
 
@@ -793,6 +802,11 @@ void ui_stress_init() {
 
 void ui_stress_deinit() {
     window_destroy(s_stress_window);
+}
+
+void ui_stress_start_automatic(void) {
+    ui_stress_push();
+    start_stress_scan(true);
 }
 
 void ui_stress_push() {

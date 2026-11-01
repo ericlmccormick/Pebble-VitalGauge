@@ -110,6 +110,7 @@ void ui_stress_mark_dirty(void);
 void ui_stress_hrv_update(void);
 int ui_stress_hrv_baseline(int *days);
 int ui_stress_latest_hrv(void);
+time_t ui_stress_latest_hrv_time(void);
 void ui_stress_start_morning(void);
 void ui_stress_start_automatic(void);
 

@@ -98,20 +98,27 @@ static int hrv_baseline_ms(int *eligible_count) {
     uint16_t good[HRV_HISTORY_CAP];
     int count = 0;
     time_t limit = time(NULL) - 30 * 86400;
+    // Keep previously saved good manual scans (context 0) eligible while
+    // preferentially selecting a good morning scan (context 2) per day.
+    // Elevated-HR scans (context 1) never establish resting baseline.
     for (int i = 0; i < s_hrv_count_history; ++i) {
         HRVRecord *r = &s_hrv_history[i];
-        if (r->quality == 2 && r->automatic == 2 && r->timestamp >= (uint32_t)limit) {
-            bool already_recorded_day = false;
-            for (int j = i + 1; j < s_hrv_count_history; ++j) {
-                HRVRecord *newer = &s_hrv_history[j];
-                if (newer->quality == 2 && newer->automatic == 2 &&
-                    newer->timestamp / 86400 == r->timestamp / 86400) {
-                    already_recorded_day = true;
-                    break;
-                }
+        if (r->quality != 2 || r->automatic == 1 ||
+            r->timestamp < (uint32_t)limit) continue;
+        bool better_same_day = false;
+        for (int j = 0; j < s_hrv_count_history; ++j) {
+            if (i == j) continue;
+            HRVRecord *other = &s_hrv_history[j];
+            if (other->quality != 2 || other->automatic == 1 ||
+                other->timestamp < (uint32_t)limit ||
+                other->timestamp / 86400 != r->timestamp / 86400) continue;
+            if ((other->automatic == 2 && r->automatic != 2) ||
+                (other->automatic == r->automatic && j > i)) {
+                better_same_day = true;
+                break;
             }
-            if (!already_recorded_day) good[count++] = r->rmssd;
         }
+        if (!better_same_day) good[count++] = r->rmssd;
     }
     *eligible_count = count;
     if (count < HRV_BASELINE_MIN) return 0;
@@ -122,6 +129,7 @@ static int hrv_baseline_ms(int *eligible_count) {
     }
     return good[count / 2];
 }
+
 static void hrv_save_completed(int bpm) {
     if (!s_hrv_active || s_hrv_delta_count < 20 || s_hrv_rmssd <= 0) return;
     int rejected_percent = s_hrv_received ?

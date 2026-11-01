@@ -33,6 +33,7 @@ typedef struct {
   uint8_t automatic; // 2: background resting baseline
 } HRVRecord;
 static bool s_hrv_recording;
+static uint8_t s_scan_kind; // 1 elevated-HR, 2 resting calibration
 static time_t s_hrv_started;
 static time_t s_last_ppi_time;
 static uint16_t s_previous_ppi, s_pairs, s_accepted, s_rejected, s_received;
@@ -74,7 +75,7 @@ static void finish_rest_scan(void) {
     .bpm = (uint16_t)(bpm > 0 ? bpm : 0),
     .accepted = (uint8_t)(s_accepted > 255 ? 255 : s_accepted),
     .rejected = (uint8_t)(s_rejected > 255 ? 255 : s_rejected),
-    .quality = quality, .automatic = 2
+    .quality = quality, .automatic = s_scan_kind
   };
   persist_write_data(HRV_HISTORY_KEY, records, count * sizeof(HRVRecord));
   // Rebuild the number of distinct good-quality calibration days.
@@ -91,11 +92,32 @@ static void finish_rest_scan(void) {
     if (!seen) ++days;
   }
   persist_write_int(HRV_CALIBRATION_DAYS_KEY, days);
+  // Alert only on a confident HRV depression relative to personal baseline.
+  if (s_scan_kind == 1 && quality == 2 && days >= 7) {
+    uint16_t resting[HRV_HISTORY_CAP];
+    int n = 0;
+    for (int i = 0; i < count; ++i)
+      if (records[i].quality == 2 && records[i].automatic != 1 &&
+          records[i].timestamp >= (uint32_t)limit)
+        resting[n++] = records[i].rmssd;
+    for (int i = 1; i < n; ++i) {
+      uint16_t v = resting[i]; int j = i;
+      while (j > 0 && resting[j - 1] > v) {
+        resting[j] = resting[j - 1]; --j;
+      }
+      resting[j] = v;
+    }
+    if (n >= 7 && (uint32_t)rmssd * 10 < (uint32_t)resting[n / 2] * 7) {
+      persist_write_int(HRV_WORKER_LAUNCH_CONTEXT_KEY, 1);
+      worker_launch_app();
+    }
+  }
 }
-static void begin_rest_scan(time_t now) {
+static void begin_rest_scan(time_t now, uint8_t kind) {
   if (s_hrv_recording) return;
   if (!health_service_set_hrv_sample_period(1)) return;
   s_hrv_recording = true;
+  s_scan_kind = kind;
   s_hrv_started = now;
   s_last_ppi_time = 0;
   s_previous_ppi = s_pairs = s_accepted = s_rejected = s_received = 0;
@@ -153,7 +175,7 @@ static void health_handler(HealthEventType event, void *context) {
             if (now - s_quiet_since >= HRV_REST_CONFIRM_SECONDS &&
                 (!last_attempt || now - last_attempt >= HRV_REST_COOLDOWN_SECONDS)) {
                 s_quiet_since = 0;
-                begin_rest_scan(now);
+                begin_rest_scan(now, 2);
                 return;
             }
         } else s_quiet_since = 0;
@@ -193,8 +215,7 @@ static void health_handler(HealthEventType event, void *context) {
     if (last > 0 && now - last < AUTO_COOLDOWN_SECONDS) return;
     persist_write_int(AUTO_LAST_TRIGGER_KEY, (int)now);
     s_elevated_since = 0;
-    persist_write_int(HRV_WORKER_LAUNCH_CONTEXT_KEY, 1);
-    worker_launch_app();
+    begin_rest_scan(now, 1);
 }
 
 // ============================================================================

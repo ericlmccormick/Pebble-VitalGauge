@@ -61,6 +61,12 @@ static const struct EKGPoint ekg_pts[] = {
 };
 
 #define HRV_SAMPLES 60
+static uint32_t hrv_sqrt(uint32_t n);
+static void start_stress_scan(bool automatic);
+static uint32_t s_hrv_delta_squares;
+static uint16_t s_hrv_delta_count;
+static uint16_t s_hrv_accepted_total;
+static uint16_t s_hrv_previous;
 static uint16_t s_hrv_intervals[HRV_SAMPLES];
 static uint8_t s_hrv_count;
 static int s_hrv_rmssd;
@@ -82,7 +88,8 @@ typedef struct {
 } HRVRecord;
 static HRVRecord s_hrv_history[HRV_HISTORY_CAP];
 static uint8_t s_hrv_count_history;
-static bool s_auto_scan;
+static uint8_t s_scan_context; // 0 manual, 1 elevated pulse, 2 morning recovery
+#define HRV_MORNING_DAY_KEY 411
 static uint8_t s_hrv_rejected;
 static uint8_t s_hrv_received;
 static time_t s_hrv_last_event;
@@ -93,11 +100,11 @@ static int hrv_baseline_ms(int *eligible_count) {
     time_t limit = time(NULL) - 30 * 86400;
     for (int i = 0; i < s_hrv_count_history; ++i) {
         HRVRecord *r = &s_hrv_history[i];
-        if (r->quality == 2 && !r->automatic && r->timestamp >= (uint32_t)limit) {
+        if (r->quality == 2 && r->automatic == 2 && r->timestamp >= (uint32_t)limit) {
             bool already_recorded_day = false;
             for (int j = i + 1; j < s_hrv_count_history; ++j) {
                 HRVRecord *newer = &s_hrv_history[j];
-                if (newer->quality == 2 && !newer->automatic &&
+                if (newer->quality == 2 && newer->automatic == 2 &&
                     newer->timestamp / 86400 == r->timestamp / 86400) {
                     already_recorded_day = true;
                     break;
@@ -116,13 +123,13 @@ static int hrv_baseline_ms(int *eligible_count) {
     return good[count / 2];
 }
 static void hrv_save_completed(int bpm) {
-    if (!s_hrv_active || s_hrv_count < 20 || s_hrv_rmssd <= 0) return;
+    if (!s_hrv_active || s_hrv_delta_count < 20 || s_hrv_rmssd <= 0) return;
     int rejected_percent = s_hrv_received ?
         ((int)s_hrv_rejected * 100 / s_hrv_received) : 100;
     // Quality is conservative until consecutive PPI continuity can be verified.
-    uint8_t quality = (s_hrv_count >= HRV_QUALITY_MIN &&
+    uint8_t quality = (s_hrv_delta_count >= HRV_QUALITY_MIN &&
                        rejected_percent <= 10) ? 2 :
-                      (s_hrv_count >= 20 && rejected_percent <= 25) ? 1 : 0;
+                      (s_hrv_delta_count >= 20 && rejected_percent <= 25) ? 1 : 0;
     if (s_hrv_count_history >= HRV_HISTORY_CAP) {
         memmove(s_hrv_history, s_hrv_history + 1,
                 (HRV_HISTORY_CAP - 1) * sizeof(HRVRecord));
@@ -131,13 +138,13 @@ static void hrv_save_completed(int bpm) {
     HRVRecord *record = &s_hrv_history[s_hrv_count_history++];
     *record = (HRVRecord){.timestamp=(uint32_t)time(NULL),
         .rmssd=(uint16_t)s_hrv_rmssd, .bpm=(uint16_t)(bpm > 0 ? bpm : 0),
-        .accepted=s_hrv_count, .rejected=s_hrv_rejected,
-        .quality=quality, .automatic=s_auto_scan};
+        .accepted=(uint8_t)(s_hrv_accepted_total > 255 ? 255 : s_hrv_accepted_total), .rejected=s_hrv_rejected,
+        .quality=quality, .automatic=s_scan_context};
     persist_write_data(HRV_HISTORY_KEY, s_hrv_history,
                        s_hrv_count_history * sizeof(HRVRecord));
     APP_LOG(APP_LOG_LEVEL_INFO,
             "HRV completed RMSSD=%d quality=%d accepted=%d rejected=%d auto=%d",
-            s_hrv_rmssd, quality, s_hrv_count, s_hrv_rejected, s_auto_scan);
+            s_hrv_rmssd, quality, s_hrv_accepted_total, s_hrv_rejected, s_scan_context);
     // Legacy BPM-range scoring remains until baseline is calibrated.
     int n = 0, baseline = hrv_baseline_ms(&n);
     if (baseline > 0 && quality == 2) {
@@ -168,6 +175,10 @@ static void hrv_begin(void) {
     s_hrv_rejected = 0;
     s_hrv_received = 0;
     s_hrv_last_event = 0;
+    s_hrv_delta_squares = 0;
+    s_hrv_delta_count = 0;
+    s_hrv_accepted_total = 0;
+    s_hrv_previous = 0;
     s_hrv_active = health_service_set_hrv_sample_period(1);
 }
 
@@ -179,37 +190,47 @@ static void hrv_end(void) {
 void ui_stress_hrv_update(void) {
     if (!s_hrv_active || !s_is_scanning) return;
     uint16_t ppi = health_service_peek_hrv_ppi_ms();
-    ++s_hrv_received;
-    time_t event_time = time(NULL);
-    if (ppi < 400 || ppi > 1500) { ++s_hrv_rejected; s_hrv_last_event = 0; s_hrv_count = 0; return; }
-    if (s_hrv_last_event && event_time - s_hrv_last_event > 3) {
-        // Avoid an RMSSD delta across a gap in heartbeat reports.
-        s_hrv_count = 0;
+    if (s_hrv_received < 255) ++s_hrv_received;
+    time_t now = time(NULL);
+    if (ppi < 400 || ppi > 1500) {
+        if (s_hrv_rejected < 255) ++s_hrv_rejected;
+        s_hrv_previous = 0;
+        return;
     }
-    s_hrv_last_event = event_time;
-    if (s_hrv_count) {
-        uint16_t previous = s_hrv_intervals[s_hrv_count - 1];
-        if ((int)ppi - (int)previous > 250 ||
-            (int)previous - (int)ppi > 250) { ++s_hrv_rejected; s_hrv_count = 0; return; }
-    }
-    if (s_hrv_count < HRV_SAMPLES) {
-        s_hrv_intervals[s_hrv_count++] = ppi;
-    } else {
-        memmove(s_hrv_intervals, s_hrv_intervals + 1,
-                (HRV_SAMPLES - 1) * sizeof(uint16_t));
-        s_hrv_intervals[HRV_SAMPLES - 1] = ppi;
-    }
-    if (s_hrv_count >= 20) {
-        uint32_t sum = 0;
-        for (int i = 1; i < s_hrv_count; ++i) {
-            int d = (int)s_hrv_intervals[i] - s_hrv_intervals[i - 1];
-            sum += (uint32_t)(d * d);
+    // Only differences between adjacent, uninterrupted valid beats count.
+    if (s_hrv_last_event && now - s_hrv_last_event > 3)
+        s_hrv_previous = 0;
+    s_hrv_last_event = now;
+    if (s_hrv_previous) {
+        int delta = (int)ppi - (int)s_hrv_previous;
+        if (delta > 250 || delta < -250) {
+            if (s_hrv_rejected < 255) ++s_hrv_rejected;
+            s_hrv_previous = 0;
+            return;
         }
-        s_hrv_rmssd = (int)hrv_sqrt(sum / (s_hrv_count - 1));
+        s_hrv_delta_squares += (uint32_t)(delta * delta);
+        ++s_hrv_delta_count;
     }
+    s_hrv_previous = ppi;
+    ++s_hrv_accepted_total;
+    // Use all consecutive accepted pairs, not only the last 60 samples.
+    if (s_hrv_delta_count >= 20)
+        s_hrv_rmssd = (int)hrv_sqrt(s_hrv_delta_squares / s_hrv_delta_count);
     ui_stress_mark_dirty();
 }
 
+int ui_stress_hrv_baseline(int *days) {
+    return hrv_baseline_ms(days);
+}
+int ui_stress_latest_hrv(void) {
+    return s_hrv_count_history ?
+        s_hrv_history[s_hrv_count_history - 1].rmssd : 0;
+}
+void ui_stress_start_morning(void) {
+    ui_stress_push();
+    start_stress_scan(true);
+    s_scan_context = 2;
+}
 
 // ============================================================================
 // --- SECTION 2: MATH HELPERS ---
@@ -389,13 +410,13 @@ static void unified_timer_callback(void *data) {
             // Constrain the score between 10 and 100, then write to persistent storage
             int eligible = 0;
             int baseline = hrv_baseline_ms(&eligible);
-            if (!(baseline > 0 && s_hrv_count >= HRV_QUALITY_MIN &&
+            if (!(baseline > 0 && s_hrv_delta_count >= HRV_QUALITY_MIN &&
                   s_hrv_received > 0 && (int)s_hrv_rejected * 10 <= s_hrv_received)) {
                 persist_write_int(PERSIST_KEY_SCORE, (score < 10) ? 10 : (score > 100 ? 100 : score));
             }
             
             // Trigger a double pulse haptic alert if haptics are enabled
-            if (g_haptic_level > 0) vibes_double_pulse(); 
+            if (g_haptic_level > 0 && s_scan_context == 0) vibes_double_pulse(); 
             // Mark the main hub UI for a redraw to update the stress ring
             ui_hub_mark_dirty(); 
         }
@@ -603,8 +624,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         // Configure context and render countdown
         graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                            GRect(10, 150, 180, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-        if (s_hrv_count >= 20) {
-            snprintf(buf, sizeof(buf), "RMSSD: %d ms (%d beats)", s_hrv_rmssd, s_hrv_count);
+        if (s_hrv_delta_count >= 20) {
+            snprintf(buf, sizeof(buf), "RMSSD: %d ms (%d beats)", s_hrv_rmssd, (int)s_hrv_accepted_total);
             graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                                GRect(10, 192, 180, 28), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
@@ -797,7 +818,7 @@ static void start_stress_scan(bool automatic) {
     if (s_is_scanning || s_is_breathing) return;
     s_show_breath_summary = false;
     s_is_scanning = true;
-    s_auto_scan = automatic;
+    s_scan_context = automatic ? 1 : 0;
     hrv_begin();
     if (s_ekg_layer) layer_set_hidden(s_ekg_layer, false);
     s_scan_ticks = 60;

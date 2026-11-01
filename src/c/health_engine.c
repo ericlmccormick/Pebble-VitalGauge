@@ -170,42 +170,132 @@ void health_engine_update_buffers() {
                 fill_sleep_mask_cb, NULL);
         }
     }
-    int native_sleep_minutes = 0;
-    int native_restful_minutes = 0;
-    for (int i = 0; i < 1440; ++i) {
-        if (s_native_sleep_mask[i]) {
-            ++native_sleep_minutes;
-            g_sleep_map[i] = s_native_restful_mask[i] ? 2 : 1;
-            if (s_native_restful_mask[i]) ++native_restful_minutes;
-        }
-    }
-    g_sleep_deep_sec = native_restful_minutes * 60;
-    g_sleep_light_sec = (native_sleep_minutes - native_restful_minutes) * 60;
-    g_longest_sleep_duration = s_found_sleep ? (int)(g_sleep_end - g_sleep_start) : 0;
-    APP_LOG(APP_LOG_LEVEL_INFO, "Sleep session=%d start=%ld end=%ld native=%d restful=%d",
-            (int)s_found_sleep, (long)g_sleep_start, (long)g_sleep_end,
-            native_sleep_minutes, native_restful_minutes);
-
+    // First collect motion/HR evidence; native intervals alone are insufficient
+    // when the firmware stops recognizing sleep after a brief awakening.
+    // Each minute keeps its own validity flag; missing records are not rest.
+    uint8_t valid_motion[1440] = {0};
+    uint8_t quiet_motion[1440] = {0};
+    uint8_t minute_hr[1440] = {0};
+    uint8_t minute_steps[1440] = {0};
     time_t rhr_window_end = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600);
     int m_hr = 999;
     HealthMinuteData chunk[CHUNK_SIZE];
     int valid_minute_records = 0;
+    int motion_records = 0;
     for (int c = 0; c < 6; c++) {
         time_t chunk_start = g_24h_start + (c * CHUNK_SIZE * 60), chunk_end = chunk_start + (CHUNK_SIZE * 60);
         uint32_t fetched = health_service_get_minute_history(chunk, CHUNK_SIZE, &chunk_start, &chunk_end);
         for (uint32_t i = 0; i < fetched; i++) {
             if (chunk[i].is_invalid) continue;
             ++valid_minute_records;
+            int slot = (int)((chunk_start + (time_t)i * 60 - g_24h_start) / 60);
+            if (slot >= 0 && slot < 1440) {
+                valid_motion[slot] = 1;
+                minute_steps[slot] = chunk[i].steps > 255 ? 255 : chunk[i].steps;
+                minute_hr[slot] = chunk[i].heart_rate_bpm > 255 ? 255 : chunk[i].heart_rate_bpm;
+                // Original application used 15 steps and 350 VMC to exclude
+                // movement-heavy periods. Reuse those limits as a veto.
+                quiet_motion[slot] = chunk[i].steps <= 15 && chunk[i].vmc <= 350;
+                ++motion_records;
+            }
             int min_of_day = (chunk_start + (i * 60) - g_24h_start) / 60, b = min_of_day / 10;
             if (b >= 0 && b < 144) { g_act_map[b] += chunk[i].steps; if (chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = chunk[i].heart_rate_bpm; }
             if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (chunk[i].heart_rate_bpm > 0 && chunk[i].vmc == 0 && chunk[i].heart_rate_bpm < m_hr) m_hr = chunk[i].heart_rate_bpm;
         }
     }
+    // Hybrid sleep recognition. Require a recent native anchor before
+    // extending a night: being motionless alone must never start a new night.
+    // A 20-minute quiet run following an interruption may extend the night.
+    // Missing minute data cannot be used to manufacture sleep.
+    int last_native = -1, first_native = -1;
+    for (int i = 0; i < 1440; ++i) {
+        if (s_native_sleep_mask[i]) {
+            if (first_native < 0) first_native = i;
+            last_native = i;
+        }
+    }
+    int inferred_minutes = 0, rejected_minutes = 0;
+    if (first_native >= 0) {
+        // Reject movement-heavy minutes incorrectly classified as native sleep,
+        // but don't reject the entire native session for a momentary movement.
+        for (int i = first_native; i <= last_native; ++i) {
+            if (s_native_sleep_mask[i] && valid_motion[i] &&
+                !quiet_motion[i]) {
+                s_native_sleep_mask[i] = 0;
+                ++rejected_minutes;
+            }
+        }
+        // Recover later sleep up to six hours beyond native sleep end,
+        // constrained to an overnight window and never extending past now.
+        // Require 20/25 consecutive minutes of low motion, at least 20 samples.
+        int cutoff = last_native + 360;
+        if (cutoff > 1439) cutoff = 1439;
+        for (int i = last_native + 1; i <= cutoff; ++i) {
+            time_t when = g_24h_start + (time_t)i * 60;
+            struct tm *local = localtime(&when);
+            if (!local || (local->tm_hour >= 11 && local->tm_hour < 20))
+                break; // Do not convert ordinary daytime inactivity to sleep.
+            if (i + 25 > 1440 || i + 25 > cutoff + 1) break;
+            int good = 0, observed = 0, active = 0, hr_count = 0, hr_sum = 0;
+            for (int j = i; j < i + 25; ++j) {
+                if (!valid_motion[j]) continue;
+                ++observed;
+                if (quiet_motion[j]) ++good;
+                else ++active;
+                if (minute_hr[j] > 0) { hr_sum += minute_hr[j]; ++hr_count; }
+            }
+            // The watch cannot reliably infer sleep from no HR or no movement
+            // records; require HR coverage as supporting evidence.
+            if (observed < 20 || good < 20 || active > 5 || hr_count < 12) continue;
+            int avg_hr = hr_sum / hr_count;
+            if (avg_hr < 35 || avg_hr > 95) continue;
+            // Restrict candidate to immediately after a native anchor/accepted
+            // estimate; awake gaps up to 90 minutes are allowed.
+            int prev = i - 1;
+            while (prev >= last_native && !g_sleep_map[prev] &&
+                   !s_native_sleep_mask[prev]) --prev;
+            if (i - prev > 90) break;
+            // Mark the sustained quiet period, not the preceding wake gap.
+            for (int j = i; j < i + 25; ++j) {
+                if (valid_motion[j] && quiet_motion[j] &&
+                    !s_native_sleep_mask[j]) {
+                    g_sleep_map[j] = 3; // estimated sleep, not confirmed restful
+                    ++inferred_minutes;
+                }
+            }
+            i += 24;
+        }
+    }
+    int native_sleep_minutes = 0, native_restful_minutes = 0;
+    int earliest = -1, latest = -1;
+    for (int i = 0; i < 1440; ++i) {
+        if (s_native_sleep_mask[i]) {
+            g_sleep_map[i] = s_native_restful_mask[i] ? 2 : 1;
+            ++native_sleep_minutes;
+            if (s_native_restful_mask[i]) ++native_restful_minutes;
+        }
+        if (g_sleep_map[i]) {
+            if (earliest < 0) earliest = i;
+            latest = i;
+        }
+    }
+    if (earliest >= 0) {
+        g_sleep_start = g_24h_start + earliest * 60;
+        g_sleep_end = g_24h_start + (latest + 1) * 60;
+    }
+    g_sleep_deep_sec = native_restful_minutes * 60;
+    g_sleep_light_sec = (native_sleep_minutes - native_restful_minutes +
+                         inferred_minutes) * 60;
+    g_longest_sleep_duration = earliest >= 0 ? (latest - earliest + 1) * 60 : 0;
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "Sleep native=%d restful=%d estimated=%d motion_rejected=%d records=%d",
+            native_sleep_minutes, native_restful_minutes, inferred_minutes,
+            rejected_minutes, motion_records);
     APP_LOG(APP_LOG_LEVEL_INFO, "Minute history valid records=%d", valid_minute_records);
     g_morning_hr_comp = (m_hr == 999) ? 60 : m_hr;
     persist_write_int(PERSIST_KEY_RHR, g_morning_hr_comp);
     int net = g_sleep_deep_sec + g_sleep_light_sec;
-    g_sleep_data_available = (s_found_sleep && net > 0);
+    g_sleep_data_available = (net > 0);
     if (g_sleep_data_available) {
         int duration_pct = (net * 100) / (8 * 3600);
         if (duration_pct > 100) duration_pct = 100;

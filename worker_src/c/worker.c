@@ -12,6 +12,13 @@
 #define AUTO_CONFIRM_SECONDS 120
 #define AUTO_COOLDOWN_SECONDS 1800
 #define AUTO_LAST_TRIGGER_KEY 9001
+#define HRV_CALIBRATION_DAYS_KEY 413
+#define HRV_WORKER_LAUNCH_CONTEXT_KEY 414
+#define HRV_REST_LAST_ATTEMPT_KEY 415
+#define HRV_REST_PENDING_KEY 416
+#define HRV_REST_CONFIRM_SECONDS 180
+#define HRV_REST_COOLDOWN_SECONDS 21600
+static time_t s_quiet_since;
 static time_t s_elevated_since;
 
 static void health_handler(HealthEventType event, void *context) {
@@ -19,6 +26,31 @@ static void health_handler(HealthEventType event, void *context) {
     time_t now = time(NULL);
     HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateBPM);
     HealthActivityMask activity = health_service_peek_current_activities();
+    // Opportunistic HRV calibration: the worker never samples PPI itself.
+    // It only detects a quiet opportunity and asks the app to collect it.
+    int calibrated_days = persist_exists(HRV_CALIBRATION_DAYS_KEY) ?
+        persist_read_int(HRV_CALIBRATION_DAYS_KEY) : 0;
+    if (calibrated_days < 7 && bpm >= 45 && bpm <= 100 &&
+        !(activity & (HealthActivityWalk | HealthActivityRun |
+                      HealthActivityOpenWorkout))) {
+        HealthValue quiet_steps = health_service_sum(
+            HealthMetricStepCount, now - 600, now);
+        if (quiet_steps >= 0 && quiet_steps <= 8) {
+            if (!s_quiet_since) s_quiet_since = now;
+            time_t last_attempt = persist_exists(HRV_REST_LAST_ATTEMPT_KEY) ?
+                persist_read_int(HRV_REST_LAST_ATTEMPT_KEY) : 0;
+            if (now - s_quiet_since >= HRV_REST_CONFIRM_SECONDS &&
+                (!last_attempt || now - last_attempt >= HRV_REST_COOLDOWN_SECONDS)) {
+                persist_write_int(HRV_REST_LAST_ATTEMPT_KEY, (int)now);
+                persist_write_int(HRV_WORKER_LAUNCH_CONTEXT_KEY, 2);
+                persist_write_int(HRV_REST_PENDING_KEY, (int)now);
+                s_quiet_since = 0;
+                worker_launch_app();
+                return;
+            }
+        } else s_quiet_since = 0;
+    } else s_quiet_since = 0;
+
     // Model expected HR from recent exertion rather than vetoing activity.
     // These are conservative heuristic thresholds and should be personalized
     // after a baseline is established. Walking never automatically disqualifies.
@@ -52,6 +84,7 @@ static void health_handler(HealthEventType event, void *context) {
     if (last > 0 && now - last < AUTO_COOLDOWN_SECONDS) return;
     persist_write_int(AUTO_LAST_TRIGGER_KEY, (int)now);
     s_elevated_since = 0;
+    persist_write_int(HRV_WORKER_LAUNCH_CONTEXT_KEY, 1);
     worker_launch_app();
 }
 

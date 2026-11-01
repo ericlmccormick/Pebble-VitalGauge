@@ -7,6 +7,7 @@
 // ============================================================================
 int g_live_energy_score = 0;
 int g_sleep_comp = 0;
+bool g_sleep_data_available = false;
 int g_readiness_comp = 0;
 int g_card_eff_comp = 0;
 int g_exertion_comp = 0;
@@ -106,14 +107,43 @@ static void update_history_arrays() {
 // ============================================================================
 // --- SECTION: DATA FETCHING AND PARSING (health_engine.c) ---
 // ============================================================================
-static bool sleep_session_cb(HealthActivity activity, time_t time_start, time_t time_end, void *context) {
-    if (activity == HealthActivitySleep) {
-        if (g_sleep_start == 0 || time_start < g_sleep_start) g_sleep_start = time_start;
-        if (g_sleep_end == 0 || time_end > g_sleep_end) g_sleep_end = time_end;
-        g_longest_sleep_duration = g_sleep_end - g_sleep_start;
-    } else if (activity == HealthActivityRestfulSleep) {
-        int s = (time_start - g_24h_start) / 60, e = (time_end - g_24h_start) / 60;
-        for (int i = (s < 0 ? 0 : s); i <= (e > 1439 ? 1439 : e); i++) s_native_restful_mask[i] = true;
+// Native activity intervals are the source of truth for sleep. The minute
+// history API may have gaps, so it must not determine whether sleep occurred.
+static uint8_t s_native_sleep_mask[1440];
+static time_t s_latest_sleep_end;
+static bool s_found_sleep;
+
+static bool find_latest_sleep_cb(HealthActivity activity, time_t start,
+                                 time_t end, void *context) {
+    if (activity != HealthActivitySleep || end <= start) return true;
+    if (!s_found_sleep) {
+        s_found_sleep = true;
+        g_sleep_start = start;
+        g_sleep_end = end;
+        s_latest_sleep_end = end;
+    } else if (end >= g_sleep_start - 90 * 60 && start <= g_sleep_end + 90 * 60) {
+        if (start < g_sleep_start) g_sleep_start = start;
+        if (end > g_sleep_end) g_sleep_end = end;
+    } else if (end < g_sleep_start - 90 * 60) {
+        return false; // Older separate sleep session; don't merge a prior night.
+    }
+    return true;
+}
+
+static bool fill_sleep_mask_cb(HealthActivity activity, time_t start,
+                                time_t end, void *context) {
+    if (end <= g_sleep_start || start >= g_sleep_end || end <= start) return true;
+    if (start < g_sleep_start) start = g_sleep_start;
+    if (end > g_sleep_end) end = g_sleep_end;
+    // Round outward for display; use exactly one state per minute to avoid
+    // double counting overlapping activity records.
+    int first = (int)((start - g_24h_start) / 60);
+    int last = (int)((end - g_24h_start + 59) / 60);
+    if (first < 0) first = 0;
+    if (last > 1440) last = 1440;
+    for (int i = first; i < last; ++i) {
+        if (activity == HealthActivitySleep) s_native_sleep_mask[i] = 1;
+        else if (activity == HealthActivityRestfulSleep) s_native_restful_mask[i] = true;
     }
     return true;
 }
@@ -124,35 +154,78 @@ void health_engine_update_buffers() {
     memset(g_act_map, 0, sizeof(g_act_map)); memset(g_stress_map, 0, sizeof(g_stress_map));
     memset(g_sleep_map, 0, sizeof(g_sleep_map)); memset(s_native_restful_mask, 0, sizeof(s_native_restful_mask));
     
-    health_service_activities_iterate(HealthActivitySleep | HealthActivityRestfulSleep, time_start_of_today() - (12 * 3600), now, HealthIterationDirectionPast, sleep_session_cb, NULL);
-    
+    s_found_sleep = false;
+    memset(s_native_sleep_mask, 0, sizeof(s_native_sleep_mask));
+    time_t query_start = now - 36 * 3600;
+    HealthServiceAccessibilityMask access = health_service_any_activity_accessible(
+        HealthActivitySleep | HealthActivityRestfulSleep, query_start, now);
+    APP_LOG(APP_LOG_LEVEL_INFO, "Sleep activity accessibility mask: %lu",
+            (unsigned long)access);
+    if (access & HealthServiceAccessibilityMaskAvailable) {
+        health_service_activities_iterate(HealthActivitySleep, query_start, now,
+                                          HealthIterationDirectionPast,
+                                          find_latest_sleep_cb, NULL);
+        if (s_found_sleep) {
+            health_service_activities_iterate(
+                HealthActivitySleep | HealthActivityRestfulSleep,
+                g_sleep_start, g_sleep_end, HealthIterationDirectionPast,
+                fill_sleep_mask_cb, NULL);
+        }
+    }
+    int native_sleep_minutes = 0;
+    int native_restful_minutes = 0;
+    for (int i = 0; i < 1440; ++i) {
+        if (s_native_sleep_mask[i]) {
+            ++native_sleep_minutes;
+            g_sleep_map[i] = s_native_restful_mask[i] ? 2 : 1;
+            if (s_native_restful_mask[i]) ++native_restful_minutes;
+        }
+    }
+    g_sleep_deep_sec = native_restful_minutes * 60;
+    g_sleep_light_sec = (native_sleep_minutes - native_restful_minutes) * 60;
+    g_longest_sleep_duration = s_found_sleep ? (int)(g_sleep_end - g_sleep_start) : 0;
+    APP_LOG(APP_LOG_LEVEL_INFO, "Sleep session=%d start=%ld end=%ld native=%d restful=%d",
+            (int)s_found_sleep, (long)g_sleep_start, (long)g_sleep_end,
+            native_sleep_minutes, native_restful_minutes);
+
     time_t rhr_window_end = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600);
     int m_hr = 999;
     HealthMinuteData chunk[CHUNK_SIZE];
+    int valid_minute_records = 0;
     for (int c = 0; c < 6; c++) {
         time_t chunk_start = g_24h_start + (c * CHUNK_SIZE * 60), chunk_end = chunk_start + (CHUNK_SIZE * 60);
         uint32_t fetched = health_service_get_minute_history(chunk, CHUNK_SIZE, &chunk_start, &chunk_end);
         for (uint32_t i = 0; i < fetched; i++) {
             if (chunk[i].is_invalid) continue;
+            ++valid_minute_records;
             int min_of_day = (chunk_start + (i * 60) - g_24h_start) / 60, b = min_of_day / 10;
             if (b >= 0 && b < 144) { g_act_map[b] += chunk[i].steps; if (chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = chunk[i].heart_rate_bpm; }
-            if (chunk_start + ((time_t)i * 60) >= g_sleep_start && chunk_start + ((time_t)i * 60) <= g_sleep_end) {
-                if (min_of_day >= 0 && min_of_day < 1440) {
-                    if (chunk[i].steps > 15 || chunk[i].vmc > 350) g_sleep_map[min_of_day] = 0;
-                    else if (s_native_restful_mask[min_of_day]) { g_sleep_deep_sec += 60; g_sleep_map[min_of_day] = 2; }
-                    else { g_sleep_light_sec += 60; g_sleep_map[min_of_day] = 1; }
-                }
-            }
             if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (chunk[i].heart_rate_bpm > 0 && chunk[i].vmc == 0 && chunk[i].heart_rate_bpm < m_hr) m_hr = chunk[i].heart_rate_bpm;
         }
     }
+    APP_LOG(APP_LOG_LEVEL_INFO, "Minute history valid records=%d", valid_minute_records);
     g_morning_hr_comp = (m_hr == 999) ? 60 : m_hr;
     persist_write_int(PERSIST_KEY_RHR, g_morning_hr_comp);
     int net = g_sleep_deep_sec + g_sleep_light_sec;
-    g_sleep_comp = (net > 0) ? (((((net * 100) / (8 * 3600)) > 100 ? 100 : (net * 100) / (8 * 3600)) * 70) + (((((g_sleep_deep_sec * 100) / net) * 100) / 25) > 100 ? 100 : (((g_sleep_deep_sec * 100) / net) * 100) / 25) * 30) / 100 : 0;
-    persist_write_int(PERSIST_KEY_SLEEP_SCORE, g_sleep_comp);
-    g_readiness_comp = (g_sleep_comp - (g_morning_hr_comp - 55 < 0 ? 0 : g_morning_hr_comp - 55) > 100) ? 100 : (g_sleep_comp - (g_morning_hr_comp - 55 < 0 ? 0 : g_morning_hr_comp - 55) < 10 ? 10 : g_sleep_comp - (g_morning_hr_comp - 55 < 0 ? 0 : g_morning_hr_comp - 55));
-    persist_write_int(PERSIST_KEY_READINESS, g_readiness_comp);
+    g_sleep_data_available = (s_found_sleep && net > 0);
+    if (g_sleep_data_available) {
+        int duration_pct = (net * 100) / (8 * 3600);
+        if (duration_pct > 100) duration_pct = 100;
+        int restful_pct = (g_sleep_deep_sec * 100) / net;
+        int restful_target = (restful_pct * 100) / 25;
+        if (restful_target > 100) restful_target = 100;
+        g_sleep_comp = (duration_pct * 70 + restful_target * 30) / 100;
+        persist_write_int(PERSIST_KEY_SLEEP_SCORE, g_sleep_comp);
+        int hr_penalty = g_morning_hr_comp > 55 ? g_morning_hr_comp - 55 : 0;
+        g_readiness_comp = g_sleep_comp - hr_penalty;
+        if (g_readiness_comp < 10) g_readiness_comp = 10;
+        if (g_readiness_comp > 100) g_readiness_comp = 100;
+        persist_write_int(PERSIST_KEY_READINESS, g_readiness_comp);
+    } else {
+        APP_LOG(APP_LOG_LEVEL_WARNING, "No valid native sleep; preserving last score");
+        // Keep last valid score, but mark it unavailable rather than showing
+        // stale data as though it was collected this morning.
+    }
     health_engine_calculate_energy(); update_history_arrays();
 }
 

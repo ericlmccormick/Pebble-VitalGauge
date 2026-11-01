@@ -86,8 +86,12 @@ static void save_snapshot(void) {
     for (size_t pos = 0; pos < sizeof(s_snapshot); pos += VG_SNAPSHOT_CHUNK) {
         size_t len = sizeof(s_snapshot) - pos;
         if (len > VG_SNAPSHOT_CHUNK) len = VG_SNAPSHOT_CHUNK;
-        persist_write_data(VG_SNAPSHOT_KEY + (int)(pos / VG_SNAPSHOT_CHUNK),
-                           data + pos, len);
+        int key = VG_SNAPSHOT_KEY + (int)(pos / VG_SNAPSHOT_CHUNK);
+        uint8_t previous[VG_SNAPSHOT_CHUNK];
+        if (persist_get_size(key) == (int)len &&
+            persist_read_data(key, previous, len) == (int)len &&
+            memcmp(previous, data + pos, len) == 0) continue;
+        persist_write_data(key, data + pos, len);
     }
 }
 

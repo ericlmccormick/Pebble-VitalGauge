@@ -79,6 +79,9 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
 
     char top_buf[32];
     snprintf(top_buf, sizeof(top_buf), "Goal: %d%%\n%d Steps", goal_pct, steps);
+    if (!g_sleep_data_available) {
+        snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\\nCheck Pebble Health sync");
+    }
     graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
                        GRect(0, 40, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
@@ -259,7 +262,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Initialize string buffer for deep sleep duration
     char buf_deep[32];
     // Format the deep sleep duration into hours and minutes
-    snprintf(buf_deep, sizeof(buf_deep), "Deep: %dh %dm", g_sleep_deep_sec / 3600, (g_sleep_deep_sec % 3600) / 60);
+    snprintf(buf_deep, sizeof(buf_deep), "Restful: %dh %dm", g_sleep_deep_sec / 3600, (g_sleep_deep_sec % 3600) / 60);
     // Draw the formatted deep sleep string
     graphics_draw_text(ctx, buf_deep, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
     // Increment the vertical position for the next row

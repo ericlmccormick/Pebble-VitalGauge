@@ -92,6 +92,7 @@ void ui_stress_init(void);
 void ui_stress_deinit(void);
 void ui_stress_push(void);
 void ui_stress_mark_dirty(void);
+void ui_stress_hrv_update(void);
 
 void ui_settings_init(void);
 void ui_settings_deinit(void);

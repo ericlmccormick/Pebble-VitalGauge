@@ -99,11 +99,6 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorPictonBlue);
   graphics_fill_radial(ctx, rect_stress, GOvalScaleModeFitCircle, ring_thickness, 0, DEG_TO_TRIGANGLE((stress_val * 360) / 100));
 
-  // Native-feeling, uncluttered center: retain the original three rings.
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-  graphics_draw_text(ctx, "VITALGAUGE", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                     GRect(62, 78, 76, 18), GTextOverflowModeFill,
-                     GTextAlignmentCenter, NULL);
   int tag_h = 28;
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   
@@ -131,10 +126,7 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   snprintf(energy_text, sizeof(energy_text), "%d", g_live_energy_score); 
   graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
   graphics_draw_text(ctx, energy_text, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS), 
-                     GRect(center_x - 30, center_y - 11, 60, 40), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-  graphics_draw_text(ctx, "ENERGY", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                     GRect(center_x - 27, center_y + 25, 54, 17),
-                     GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+                     GRect(center_x - 30, center_y - 20, 60, 40), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
 
@@ -155,9 +147,6 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
     graphics_draw_text(ctx, number, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS),
                        GRect(36, 44, 128, 48), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
-    graphics_context_set_stroke_color(ctx, GColorPictonBlue);
-    graphics_context_set_stroke_width(ctx, 2);
-    graphics_draw_line(ctx, GPoint(25, 102), GPoint(175, 102));
     char details[160];
     if (s_show_morning) {
         int days = 0;
@@ -179,11 +168,11 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
                  "Sleep %d  Ready %d\nActive %d kcal\nReserve updates during day",
                  g_sleep_comp, g_readiness_comp, kcal);
     }
-    graphics_draw_text(ctx, details, fonts_get_system_font(FONT_KEY_GOTHIC_18),
-                       GRect(12, 112, 176, 79), GTextOverflowModeWordWrap,
+    graphics_draw_text(ctx, details, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                       GRect(12, 105, 176, 90), GTextOverflowModeWordWrap,
                        GTextAlignmentCenter, NULL);
-    graphics_context_set_text_color(ctx, g_dark_mode ? GColorLightGray : GColorDarkGray);
-    graphics_draw_text(ctx, "UP/DOWN  Change view", fonts_get_system_font(FONT_KEY_GOTHIC_14),
+    graphics_context_set_text_color(ctx, fg);
+    graphics_draw_text(ctx, "UP/DOWN  Change view", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
                        GRect(10, 202, 180, 20), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
 }

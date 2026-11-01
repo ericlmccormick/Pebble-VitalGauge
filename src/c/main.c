@@ -35,7 +35,7 @@ static void health_refresh_cb(void *data) {
     health_engine_update_buffers();
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
-    morning_scan_maybe_start();
+    // Routine resting HRV collection is handled entirely by the worker.
 }
 
 static void health_event_cb(HealthEventType event, void *context) {

@@ -5,12 +5,35 @@
 // ============================================================================
 static AppTimer *s_health_refresh_timer;
 static bool s_health_subscribed;
+#define MORNING_SCAN_DAY_KEY 412
+static void morning_scan_maybe_start(void) {
+    time_t now = time(NULL);
+    if (!g_sleep_data_available || !g_sleep_end || now < g_sleep_end ||
+        now - g_sleep_end > 90 * 60) return;
+    struct tm *date = localtime(&now);
+    if (!date) return;
+    int day = date->tm_year * 366 + date->tm_yday;
+    if (persist_exists(MORNING_SCAN_DAY_KEY) &&
+        persist_read_int(MORNING_SCAN_DAY_KEY) == day) return;
+    // Require a quiet recent 15-minute period; no movement is not proof of rest.
+    HealthValue steps = health_service_sum(HealthMetricStepCount,
+                                          now - 15 * 60, now);
+    HealthActivityMask activity = health_service_peek_current_activities();
+    if (steps < 0 || steps > 15 ||
+        (activity & (HealthActivityWalk | HealthActivityRun |
+                     HealthActivityOpenWorkout))) return;
+    // Set once per day to avoid interruptions and repeated scans.
+    persist_write_int(MORNING_SCAN_DAY_KEY, day);
+    ui_stress_start_morning();
+}
+
 
 static void health_refresh_cb(void *data) {
     s_health_refresh_timer = NULL;
     health_engine_update_buffers();
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
+    morning_scan_maybe_start();
 }
 
 static void health_event_cb(HealthEventType event, void *context) {
@@ -28,6 +51,7 @@ static void initial_sync_timer_cb(void *data) {
     health_engine_update_buffers();
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
+    morning_scan_maybe_start();
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {

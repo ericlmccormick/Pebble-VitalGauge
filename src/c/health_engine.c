@@ -463,6 +463,7 @@ void health_engine_update_buffers() {
         // Keep last valid score, but mark it unavailable rather than showing
         // stale data as though it was collected this morning.
     }
+    if (valid_minute_records == 0) restore_snapshot();
     health_engine_calculate_energy(); update_history_arrays();
     if (valid_minute_records > 0) save_snapshot();
 }

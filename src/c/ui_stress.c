@@ -123,7 +123,9 @@ static int hrv_baseline_ms(int *eligible_count) {
         if (!better_same_day) good[count++] = r->rmssd;
     }
     *eligible_count = count;
-    persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
+    if (!persist_exists(HRV_CALIBRATION_DAYS_KEY) ||
+        persist_read_int(HRV_CALIBRATION_DAYS_KEY) != count)
+        persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
     if (count < HRV_BASELINE_MIN) return 0;
     for (int i = 1; i < count; ++i) {
         uint16_t v = good[i]; int j = i;
@@ -233,6 +235,10 @@ void ui_stress_hrv_update(void) {
 
 int ui_stress_hrv_baseline(int *days) {
     return hrv_baseline_ms(days);
+}
+time_t ui_stress_latest_hrv_time(void) {
+    return s_hrv_count_history ?
+        (time_t)s_hrv_history[s_hrv_count_history - 1].timestamp : 0;
 }
 int ui_stress_latest_hrv(void) {
     return s_hrv_count_history ?
@@ -547,7 +553,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
     // Enable antialiasing for smoother rendering
     graphics_context_set_antialiased(ctx, true);
     // Set background color to white
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     // Paint physical background canvas
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone); 
 
@@ -578,7 +584,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         char* phase_str = (s_breath_phase % 2 == 0) ? ((s_breath_phase==0)?"INHALE":"EXHALE") : "HOLD"; 
         
         // Configure context and render instructional text header
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, phase_str, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
                            GRect(10, 40, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
@@ -589,16 +595,16 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         snprintf(sec_buf, sizeof(sec_buf), "%d", secs);
         
         // Render large countdown number in center of screen
-       graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, sec_buf, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS), 
+       graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, sec_buf, fonts_get_system_font(VG_FONT_NUMBER), 
                            GRect(10, 95, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Render side menu indicating button functionality for volume control
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, "+", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), GRect(170, 5, 20, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
         char vol_buf[16];
         snprintf(vol_buf, sizeof(vol_buf), "V\n%d", g_volume_level);
-        graphics_draw_text(ctx, vol_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(170, 90, 30, 50), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+        graphics_draw_text(ctx, vol_buf, fonts_get_system_font(VG_FONT_BODY), GRect(170, 90, 30, 50), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
         graphics_draw_text(ctx, "-", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), GRect(170, 190, 20, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Render post-session summary if flagged
@@ -613,8 +619,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
                  s_breath_start_hr, s_breath_end_hr, drop);
                  
         // Configure context and render formatted summary
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(10, 30, 180, 180), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Render diagnostic EKG view if flagged
@@ -627,18 +633,18 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         // Format live BPM readout into buffer
         snprintf(buf, sizeof(buf), "%d BPM", current_bpm);
         // Configure context and render live BPM
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
                            GRect(10, 30, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format countdown string into buffer
-        snprintf(buf, sizeof(buf), "Scanning...\n%d sec", s_scan_ticks);
+        snprintf(buf, sizeof(buf), "MEASURING HRV\n%d sec", s_scan_ticks);
         // Configure context and render countdown
-        graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
+        graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(10, 150, 180, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
         if (s_hrv_delta_count >= 20) {
-            snprintf(buf, sizeof(buf), "RMSSD: %d ms (%d beats)", s_hrv_rmssd, (int)s_hrv_accepted_total);
-            graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+            snprintf(buf, sizeof(buf), "HRV %d ms  |  %d beats", s_hrv_rmssd, (int)s_hrv_accepted_total);
+            graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_BODY),
                                GRect(10, 192, 180, 28), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
         }
@@ -734,8 +740,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         int score = persist_exists(PERSIST_KEY_SCORE) ? persist_read_int(PERSIST_KEY_SCORE) : 50; 
         
         // Configure context and render title
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, "Stress", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, "STRESS", fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format and render current score and live BPM
@@ -745,7 +751,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         snprintf(top_buf, sizeof(top_buf), "Score: %d/100  HR: %d\nHRV %s: %d/%d days",
                  score, live_bpm, baseline ? "ready" : "calibrate",
                  days, HRV_BASELINE_MIN);
-        graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+        graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
                            GRect(0, 38, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         if (s_hrv_count_history > 0) {
@@ -756,14 +762,14 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
                      last->quality == 2 ? "Good" :
                      last->quality == 1 ? "Fair" : "Poor");
             graphics_draw_text(ctx, hrv_text,
-                               fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                               fonts_get_system_font(VG_FONT_HINT),
                                GRect(0, 78, 200, 19), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
         }
         // Establish layout grid for lower statistics column
         int y_start = 100;
         int y_step = 20; int x_sq = 45; int x_txt = 65;
-        GFont row_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+        GFont row_font = fonts_get_system_font(VG_FONT_BODY);
 
         // Render peak statistics row
         graphics_context_set_fill_color(ctx, GColorRed);
@@ -797,8 +803,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         graphics_draw_text(ctx, buf_norm, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
         // Render instructional menu at the bottom of the display
-        graphics_context_set_text_color(ctx, GColorDarkGray);
-        graphics_draw_text(ctx, "[Sel]: Scan  [Up/Dn]: Breathe", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, "SELECT Scan    UP/DOWN Breathe", fonts_get_system_font(VG_FONT_HINT), 
                            GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     } 
 }
@@ -915,7 +921,7 @@ static void stress_click_config_provider(void *context) {
 // --- SECTION 7: STRESS MODULE LIFECYCLE (ui_stress.c) ---
 // ============================================================================
 static void stress_view_load(Window *w) { 
-    window_set_background_color(w, g_dark_mode ? GColorBlack : GColorWhite);
+    window_set_background_color(w, vg_background());
     s_is_scanning = false; s_is_breathing = false; s_show_breath_summary = false;
     health_service_set_heart_rate_sample_period(0);
     

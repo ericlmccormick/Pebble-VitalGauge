@@ -2,6 +2,98 @@
 
 #define CHUNK_SIZE 60
 #define HISTORY_CHUNKS (1440 / CHUNK_SIZE)
+#define VG_SNAPSHOT_KEY 520
+#define VG_SNAPSHOT_VERSION 2
+#define VG_OVERLAP_MINUTES 15
+#define VG_SNAPSHOT_CHUNK 192
+typedef struct {
+    uint16_t version;
+    uint16_t size;
+    uint32_t timestamp;
+    uint16_t activity[144];
+    uint8_t stress[144];
+    uint8_t sleep[1440];
+    uint32_t last_sync;
+    uint16_t minute_steps[1440];
+    uint8_t minute_hr[1440];
+    uint8_t minute_flags[1440];
+    int32_t sleep_start, sleep_end;
+    int32_t deep, light, longest;
+    int16_t rhr, cardiac, exertion, stress_drain;
+    uint8_t sleep_available;
+} VGHealthSnapshot;
+static VGHealthSnapshot s_snapshot;
+static uint8_t s_minute_hr[1440];
+static uint16_t s_minute_steps[1440];
+static uint8_t s_minute_flags[1440]; // bit 1 valid, 2 quiet, 4 active
+static time_t s_last_sync;
+static bool s_raw_cache_valid;
+static void restore_snapshot(void) {
+    uint8_t *dest = (uint8_t *)&s_snapshot;
+    for (size_t pos = 0; pos < sizeof(s_snapshot); pos += VG_SNAPSHOT_CHUNK) {
+        size_t len = sizeof(s_snapshot) - pos;
+        if (len > VG_SNAPSHOT_CHUNK) len = VG_SNAPSHOT_CHUNK;
+        int key = VG_SNAPSHOT_KEY + (int)(pos / VG_SNAPSHOT_CHUNK);
+        if (persist_get_size(key) != (int)len ||
+            persist_read_data(key, dest + pos, len) != (int)len) return;
+    }
+    if (s_snapshot.version != VG_SNAPSHOT_VERSION ||
+        s_snapshot.size != sizeof(s_snapshot)) return;
+    memcpy(g_act_map, s_snapshot.activity, sizeof(g_act_map));
+    memcpy(g_stress_map, s_snapshot.stress, sizeof(g_stress_map));
+    memcpy(g_sleep_map, s_snapshot.sleep, sizeof(g_sleep_map));
+    // Maps are 24-hour rolling windows. Restore the original map origin,
+    // not the current time, until a fresh reconstruction is available.
+    g_24h_start = (time_t)s_snapshot.timestamp;
+    g_sleep_start = (time_t)s_snapshot.sleep_start;
+    g_sleep_end = (time_t)s_snapshot.sleep_end;
+    g_sleep_deep_sec = s_snapshot.deep;
+    g_sleep_light_sec = s_snapshot.light;
+    g_longest_sleep_duration = s_snapshot.longest;
+    g_morning_hr_comp = s_snapshot.rhr;
+    g_card_eff_comp = s_snapshot.cardiac;
+    g_exertion_comp = s_snapshot.exertion;
+    g_stress_comp = s_snapshot.stress_drain;
+    g_sleep_data_available = s_snapshot.sleep_available != 0;
+    memcpy(s_minute_steps, s_snapshot.minute_steps, sizeof(s_minute_steps));
+    memcpy(s_minute_flags, s_snapshot.minute_flags, sizeof(s_minute_flags));
+    s_last_sync = (time_t)s_snapshot.last_sync;
+    memcpy(s_minute_hr, s_snapshot.minute_hr, sizeof(s_minute_hr));
+    s_raw_cache_valid = true;
+}
+static void save_snapshot(void) {
+    s_snapshot.version = VG_SNAPSHOT_VERSION;
+    s_snapshot.size = sizeof(s_snapshot);
+    s_snapshot.timestamp = (uint32_t)g_24h_start;
+    memcpy(s_snapshot.activity, g_act_map, sizeof(g_act_map));
+    memcpy(s_snapshot.stress, g_stress_map, sizeof(g_stress_map));
+    memcpy(s_snapshot.sleep, g_sleep_map, sizeof(g_sleep_map));
+    s_snapshot.sleep_start = (int32_t)g_sleep_start;
+    s_snapshot.sleep_end = (int32_t)g_sleep_end;
+    s_snapshot.deep = g_sleep_deep_sec;
+    s_snapshot.light = g_sleep_light_sec;
+    s_snapshot.longest = g_longest_sleep_duration;
+    s_snapshot.rhr = g_morning_hr_comp;
+    s_snapshot.cardiac = g_card_eff_comp;
+    s_snapshot.exertion = g_exertion_comp;
+    s_snapshot.stress_drain = g_stress_comp;
+    s_snapshot.sleep_available = g_sleep_data_available;
+    s_snapshot.last_sync = (uint32_t)s_last_sync;
+    memcpy(s_snapshot.minute_steps, s_minute_steps, sizeof(s_minute_steps));
+    memcpy(s_snapshot.minute_flags, s_minute_flags, sizeof(s_minute_flags));
+    memcpy(s_snapshot.minute_hr, s_minute_hr, sizeof(s_snapshot.minute_hr));
+    const uint8_t *data = (const uint8_t *)&s_snapshot;
+    for (size_t pos = 0; pos < sizeof(s_snapshot); pos += VG_SNAPSHOT_CHUNK) {
+        size_t len = sizeof(s_snapshot) - pos;
+        if (len > VG_SNAPSHOT_CHUNK) len = VG_SNAPSHOT_CHUNK;
+        int key = VG_SNAPSHOT_KEY + (int)(pos / VG_SNAPSHOT_CHUNK);
+        uint8_t previous[VG_SNAPSHOT_CHUNK];
+        if (persist_get_size(key) == (int)len &&
+            persist_read_data(key, previous, len) == (int)len &&
+            memcmp(previous, data + pos, len) == 0) continue;
+        persist_write_data(key, data + pos, len);
+    }
+}
 
 // ============================================================================
 // --- SECTION 1: GLOBAL STATE INSTANTIATION ---
@@ -114,7 +206,6 @@ static uint8_t s_native_sleep_mask[1440];
 // Avoid putting several kilobytes of sensor buffers on the Pebble app stack.
 static uint8_t s_valid_motion[1440];
 static uint8_t s_quiet_motion[1440];
-static uint8_t s_minute_hr[1440];
 static uint8_t s_active_motion[1440];
 // Keep API buffers off the constrained Pebble app stack.
 static HealthMinuteData s_history_chunk[CHUNK_SIZE];
@@ -155,12 +246,36 @@ static bool fill_sleep_mask_cb(HealthActivity activity, time_t start,
     return true;
 }
 
-void health_engine_update_buffers() { 
-    time_t now = time(NULL); g_24h_start = (now / 60) * 60 - (24 * 3600);
-    g_sleep_start = 0; g_sleep_end = 0; g_sleep_deep_sec = 0; g_sleep_light_sec = 0; g_longest_sleep_duration = 0;
-    memset(g_act_map, 0, sizeof(g_act_map)); memset(g_stress_map, 0, sizeof(g_stress_map));
-    memset(g_sleep_map, 0, sizeof(g_sleep_map)); memset(s_native_restful_mask, 0, sizeof(s_native_restful_mask));
-    
+void health_engine_update_buffers() {
+    time_t now = time(NULL);
+    time_t new_origin = (now / 60) * 60 - 24 * 3600;
+    time_t old_origin = g_24h_start;
+    int shift = old_origin > 0 ? (int)((new_origin - old_origin) / 60) : 1440;
+    bool incremental = s_raw_cache_valid && s_last_sync > 0 &&
+        now >= s_last_sync && now - s_last_sync < 23 * 3600 &&
+        shift >= 0 && shift < 1440;
+    if (!incremental) {
+        memset(s_minute_steps, 0, sizeof(s_minute_steps));
+        memset(s_minute_hr, 0, sizeof(s_minute_hr));
+        memset(s_minute_flags, 0, sizeof(s_minute_flags));
+    } else if (shift > 0) {
+        memmove(s_minute_steps, s_minute_steps + shift,
+                (1440 - shift) * sizeof(s_minute_steps[0]));
+        memset(s_minute_steps + 1440 - shift, 0,
+               shift * sizeof(s_minute_steps[0]));
+        memmove(s_minute_hr, s_minute_hr + shift, 1440 - shift);
+        memset(s_minute_hr + 1440 - shift, 0, shift);
+        memmove(s_minute_flags, s_minute_flags + shift, 1440 - shift);
+        memset(s_minute_flags + 1440 - shift, 0, shift);
+    }
+    g_24h_start = new_origin;
+    g_sleep_start = 0; g_sleep_end = 0; g_sleep_deep_sec = 0;
+    g_sleep_light_sec = 0; g_longest_sleep_duration = 0;
+    memset(g_act_map, 0, sizeof(g_act_map));
+    memset(g_stress_map, 0, sizeof(g_stress_map));
+    memset(g_sleep_map, 0, sizeof(g_sleep_map));
+    memset(s_native_restful_mask, 0, sizeof(s_native_restful_mask));
+
     s_found_sleep = false;
     memset(s_native_sleep_mask, 0, sizeof(s_native_sleep_mask));
     time_t query_start = now - 36 * 3600;
@@ -182,77 +297,64 @@ void health_engine_update_buffers() {
     // First collect motion/HR evidence; native intervals alone are insufficient
     // when the firmware stops recognizing sleep after a brief awakening.
     // Each minute keeps its own validity flag; missing records are not rest.
+    // Reconstruct minute evidence from the persisted, time-aligned raw cache.
+    // Requery a short overlap to capture late-arriving / corrected samples.
+    time_t fetch_start = g_24h_start;
+    if (incremental) {
+        fetch_start = s_last_sync - VG_OVERLAP_MINUTES * 60;
+        if (fetch_start < g_24h_start) fetch_start = g_24h_start;
+    }
+    fetch_start = (fetch_start / 60) * 60;
+    int new_valid = 0;
+    for (time_t t = fetch_start; t < now; t += CHUNK_SIZE * 60) {
+        time_t start = t;
+        time_t end = t + CHUNK_SIZE * 60;
+        if (end > now) end = now;
+        uint32_t fetched = health_service_get_minute_history(
+            s_history_chunk, CHUNK_SIZE, &start, &end);
+        if (fetched > CHUNK_SIZE) fetched = CHUNK_SIZE;
+        for (uint32_t i = 0; i < fetched; ++i) {
+            if (s_history_chunk[i].is_invalid) continue;
+            int slot = (int)((start + (time_t)i * 60 - g_24h_start) / 60);
+            if (slot < 0 || slot >= 1440) continue;
+            s_minute_steps[slot] = s_history_chunk[i].steps;
+            s_minute_hr[slot] = s_history_chunk[i].heart_rate_bpm;
+            bool quiet = s_history_chunk[i].steps <= 15 &&
+                         s_history_chunk[i].vmc <= 350;
+            s_minute_flags[slot] = 1 | (quiet ? 2 : 4);
+            ++new_valid;
+        }
+    }
+    if (new_valid == 0 && !incremental) {
+        restore_snapshot();
+        return;
+    }
     memset(s_valid_motion, 0, sizeof(s_valid_motion));
     memset(s_quiet_motion, 0, sizeof(s_quiet_motion));
-    memset(s_minute_hr, 0, sizeof(s_minute_hr));
     memset(s_active_motion, 0, sizeof(s_active_motion));
-    time_t rhr_window_end = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600);
-    int m_hr = 999;
-
     int valid_minute_records = 0;
-    int motion_records = 0;
-    for (int c = 0; c < HISTORY_CHUNKS; c++) {
-        time_t chunk_start = g_24h_start + (c * CHUNK_SIZE * 60), chunk_end = chunk_start + (CHUNK_SIZE * 60);
-        time_t requested_start = chunk_start;
-        time_t requested_end = chunk_end;
-        uint32_t fetched = health_service_get_minute_history(s_history_chunk, CHUNK_SIZE,
-                                                               &chunk_start, &chunk_end);
-        int chunk_valid = 0;
-        if (fetched > CHUNK_SIZE) fetched = CHUNK_SIZE;
-        for (uint32_t i = 0; i < fetched; i++) {
-            if (s_history_chunk[i].is_invalid) continue;
-            ++valid_minute_records;
-            ++chunk_valid;
-            int slot = (int)((chunk_start + (time_t)i * 60 - g_24h_start) / 60);
-            if (slot >= 0 && slot < 1440) {
-                s_valid_motion[slot] = 1;
-                s_minute_hr[slot] = s_history_chunk[i].heart_rate_bpm;
-                // Original application used 15 steps and 350 VMC to exclude
-                // movement-heavy periods. Reuse those limits as a veto.
-                s_quiet_motion[slot] = s_history_chunk[i].steps <= 15 && s_history_chunk[i].vmc <= 350;
-                s_active_motion[slot] = (s_history_chunk[i].steps > 15 || s_history_chunk[i].vmc > 350);
-                ++motion_records;
-            }
-            int min_of_day = (chunk_start + (i * 60) - g_24h_start) / 60, b = min_of_day / 10;
-            if (b >= 0 && b < 144) { g_act_map[b] += s_history_chunk[i].steps; if (s_history_chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = s_history_chunk[i].heart_rate_bpm; }
-            if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (s_history_chunk[i].heart_rate_bpm > 0 && s_history_chunk[i].vmc == 0 && s_history_chunk[i].heart_rate_bpm < m_hr) m_hr = s_history_chunk[i].heart_rate_bpm;
-        }
-        APP_LOG(APP_LOG_LEVEL_INFO,
-                "MINUTE_CHUNK %d req=%ld..%ld actual=%ld..%ld returned=%lu valid=%d",
-                c, (long)requested_start, (long)requested_end,
-                (long)chunk_start, (long)chunk_end,
-                (unsigned long)fetched, chunk_valid);
+    time_t rhr_window_end = g_sleep_end ? g_sleep_end :
+                            time_start_of_today() + 6 * 3600;
+    int m_hr = 999;
+    for (int i = 0; i < 1440; ++i) {
+        if (!(s_minute_flags[i] & 1)) continue;
+        ++valid_minute_records;
+        s_valid_motion[i] = 1;
+        s_quiet_motion[i] = (s_minute_flags[i] & 2) != 0;
+        s_active_motion[i] = (s_minute_flags[i] & 4) != 0;
+        int b = i / 10;
+        g_act_map[b] += s_minute_steps[i];
+        if (s_minute_hr[i] > g_stress_map[b])
+            g_stress_map[b] = s_minute_hr[i];
+        time_t t = g_24h_start + (time_t)i * 60;
+        if (t >= rhr_window_end - 90 * 60 && t <= rhr_window_end &&
+            s_minute_hr[i] > 0 && s_quiet_motion[i] &&
+            s_minute_steps[i] == 0 && s_minute_hr[i] < m_hr)
+            m_hr = s_minute_hr[i];
     }
-    // Independent short-range probes: distinguish an entirely empty minute
-    // history API from missing older overnight records. A zero return makes
-    // output timestamps undefined; log requested times and count only.
-    {
-
-        time_t probe_end = now - 15 * 60;
-        time_t probe_start = probe_end - 60 * 60;
-        uint32_t found = health_service_get_minute_history(
-            s_history_probe, 60, &probe_start, &probe_end);
-        int valid = 0;
-        for (uint32_t i = 0; i < found; ++i) {
-            if (!s_history_probe[i].is_invalid) ++valid;
-        }
-        APP_LOG(APP_LOG_LEVEL_INFO,
-                "MINUTE_PROBE recent_15_to_75_min_ago returned=%lu valid=%d",
-                (unsigned long)found, valid);
-        if (g_sleep_start > 0) {
-            time_t night_start = g_sleep_start + 30 * 60;
-            time_t night_end = night_start + 60 * 60;
-            uint32_t night_found = health_service_get_minute_history(
-                s_history_probe, 60, &night_start, &night_end);
-            int night_valid = 0;
-            for (uint32_t i = 0; i < night_found; ++i) {
-                if (!s_history_probe[i].is_invalid) ++night_valid;
-            }
-            APP_LOG(APP_LOG_LEVEL_INFO,
-                    "MINUTE_PROBE first_sleep_hour returned=%lu valid=%d",
-                    (unsigned long)night_found, night_valid);
-        }
-    }
+    APP_LOG(APP_LOG_LEVEL_INFO, "HRV sync %s queried %ld min; new valid %d",
+            incremental ? "incremental" : "full",
+            (long)((now - fetch_start) / 60), new_valid);
     // Rebuild the entire night from minute data. Native Pebble sessions are
     // anchors, not the final authority. Orientation changes are deliberately
     // ignored: an arm hanging off the bed is not evidence of getting up.
@@ -400,6 +502,11 @@ void health_engine_update_buffers() {
         // stale data as though it was collected this morning.
     }
     health_engine_calculate_energy(); update_history_arrays();
+    if (new_valid > 0) {
+        s_last_sync = now;
+        s_raw_cache_valid = true;
+        save_snapshot();
+    }
 }
 
 // ============================================================================
@@ -410,6 +517,7 @@ void health_engine_init() {
     if (persist_exists(PERSIST_KEY_ENERGY_RESERVE)) g_live_energy_score = persist_read_int(PERSIST_KEY_ENERGY_RESERVE);
     if (persist_exists(PERSIST_KEY_SLEEP_SCORE)) g_sleep_comp = persist_read_int(PERSIST_KEY_SLEEP_SCORE);
     if (persist_exists(PERSIST_KEY_READINESS)) g_readiness_comp = persist_read_int(PERSIST_KEY_READINESS);
+    restore_snapshot();
 }
 
 void health_engine_deinit() {

@@ -7,7 +7,36 @@ static Window *s_hub_window;
 static Layer *s_hub_drawing_layer;
 static Window *s_recovery_window;
 static Layer *s_recovery_layer;
-static bool s_show_morning;
+static uint8_t s_recovery_page;
+static uint8_t s_last_recovery_page;
+static int energy_clamp(int x) { return x < 0 ? 0 : x > 100 ? 100 : x; }
+static void energy_contribution_perimeter(GContext *ctx) {
+    // Draw actual terms of the existing composite energy formula; not an
+    // invented chronology. Green is starting charge, cyan cardiac adjustment,
+    // orange and red mark the portions subtracted from the intermediate score.
+    int base = (g_sleep_comp + g_readiness_comp) / 2;
+    int cardiac = g_card_eff_comp / 10;
+    int before_drain = energy_clamp(base + cardiac);
+    int after_activity = energy_clamp(base + cardiac - g_exertion_comp);
+    int current = energy_clamp(base + cardiac - g_exertion_comp - g_stress_comp);
+    draw_perimeter_segment(ctx, 0, 856, 9, GColorLightGray);
+    if (base > 0)
+        draw_perimeter_segment(ctx, 0, energy_clamp(base) * 856 / 100,
+                               9, GColorJaegerGreen);
+    if (cardiac > 0 && before_drain > base)
+        draw_perimeter_segment(ctx, energy_clamp(base) * 856 / 100,
+                               before_drain * 856 / 100, 9, GColorPictonBlue);
+    if (before_drain > after_activity)
+        draw_perimeter_segment(ctx, after_activity * 856 / 100,
+                               before_drain * 856 / 100, 9, GColorOrange);
+    if (after_activity > current)
+        draw_perimeter_segment(ctx, current * 856 / 100,
+                               after_activity * 856 / 100, 9, GColorRed);
+    GPoint point = get_perimeter_point(current * 856 / 100, 9);
+    graphics_context_set_fill_color(ctx, vg_foreground());
+    graphics_fill_circle(ctx, point, 6);
+}
+
 
 static void recovery_open(void);
 
@@ -71,7 +100,7 @@ static void hub_click_config_provider(void *context) {
 // ============================================================================
 static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) { 
   graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+  graphics_context_set_fill_color(ctx, vg_background());
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
   int center_x = 100, center_y = 114, ring_thickness = 14, ring_spacing = 18;
@@ -100,32 +129,32 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   graphics_fill_radial(ctx, rect_stress, GOvalScaleModeFitCircle, ring_thickness, 0, DEG_TO_TRIGANGLE((stress_val * 360) / 100));
 
   int tag_h = 28;
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GFont font = fonts_get_system_font(VG_FONT_TITLE);
   
   graphics_context_set_fill_color(ctx, GColorPictonBlue);
   graphics_fill_rect(ctx, GRect(0, 0, 56, tag_h), 0, GCornerNone); 
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+  graphics_context_set_text_color(ctx, vg_foreground());
   graphics_draw_text(ctx, "Stress", font, GRect(0, -4, 54, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   graphics_context_set_fill_color(ctx, GColorJaegerGreen);
   graphics_fill_rect(ctx, GRect(130, 0, 70, tag_h), 0, GCornerNone);
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack); 
+  graphics_context_set_text_color(ctx, vg_foreground()); 
   graphics_draw_text(ctx, "Activity", font, GRect(130, -4, 68, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   graphics_context_set_fill_color(ctx, GColorChromeYellow); 
   graphics_fill_rect(ctx, GRect(0, 200, 75, tag_h), 0, GCornerNone);
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+  graphics_context_set_text_color(ctx, vg_foreground());
   graphics_draw_text(ctx, "Trends", font, GRect(0, 196, 73, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   graphics_context_set_fill_color(ctx, GColorVividViolet);
   graphics_fill_rect(ctx, GRect(152, 200, 48, tag_h), 0, GCornerNone);
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack); 
+  graphics_context_set_text_color(ctx, vg_foreground()); 
   graphics_draw_text(ctx, "Sleep", font, GRect(154, 196, 44, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   char energy_text[8];
   snprintf(energy_text, sizeof(energy_text), "%d", g_live_energy_score); 
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-  graphics_draw_text(ctx, energy_text, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS), 
+  graphics_context_set_text_color(ctx, vg_foreground());
+  graphics_draw_text(ctx, energy_text, fonts_get_system_font(VG_FONT_NUMBER), 
                      GRect(center_x - 30, center_y - 20, 60, 40), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
@@ -133,39 +162,65 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
 // Energy / recovery detail area. The center of the existing rings is its
 // entry point; Up/Down switches pages and Back returns to the dashboard.
 static void recovery_draw(Layer *layer, GContext *ctx) {
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
-    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-    char text[196];
-    if (s_show_morning) {
+    graphics_context_set_text_color(ctx, vg_foreground());
+    if (s_recovery_page == 0 || s_recovery_page == 1) energy_contribution_perimeter(ctx);
+    const char *titles[] = {"ENERGY RESERVE", "ENERGY CONTRIBUTORS", "MORNING RECOVERY"};
+    graphics_draw_text(ctx, titles[s_recovery_page], fonts_get_system_font(VG_FONT_TITLE),
+                       GRect(4, 8, 192, 32), GTextOverflowModeFill,
+                       GTextAlignmentCenter, NULL);
+    int primary = s_recovery_page == 2 ? g_readiness_comp : g_live_energy_score;
+    char number[20];
+    snprintf(number, sizeof(number), "%d", primary);
+    graphics_draw_text(ctx, number, fonts_get_system_font(VG_FONT_NUMBER),
+                       GRect(28, 43, 144, 49), GTextOverflowModeFill,
+                       GTextAlignmentCenter, NULL);
+    char info[180];
+    if (s_recovery_page == 0) {
+        int kcal = (int)health_service_sum_today(HealthMetricActiveKCalories);
+        snprintf(info, sizeof(info), "Sleep %d   Ready %d\nActive %d kcal\nStress component %d\nActivity drain %d",
+                 g_sleep_comp, g_readiness_comp, kcal, g_stress_comp, g_exertion_comp);
+    } else if (s_recovery_page == 2) {
         int days = 0;
         int baseline = ui_stress_hrv_baseline(&days);
-        int last = ui_stress_latest_hrv();
-        snprintf(text, sizeof(text),
-            "Morning Recovery\n\nSleep %d/100\nReady %d/100\nRest HR %d BPM\nHRV %s\n%d / 7 days",
-            g_sleep_comp, g_readiness_comp, g_morning_hr_comp,
-            baseline ? "calibrated" : (last ? "collecting" : "unavailable"),
-            days);
+        int latest = ui_stress_latest_hrv();
+        if (latest && baseline)
+            snprintf(info, sizeof(info), "HRV %d ms   Base %d ms\nDifference %+d%%\nRest HR %d bpm\n%d/7 calibration days",
+                     latest, baseline, (latest - baseline) * 100 / baseline,
+                     g_morning_hr_comp, days);
+        else
+            snprintf(info, sizeof(info), "HRV %s\nRest HR %d bpm\nSleep score %d/100\n%d/7 calibration days",
+                     latest ? "Calibrating" : "Unavailable",
+                     g_morning_hr_comp, g_sleep_comp, days);
     } else {
-        int active = (int)health_service_sum_today(HealthMetricActiveKCalories);
-        int stress = persist_exists(PERSIST_KEY_SCORE) ?
-                     persist_read_int(PERSIST_KEY_SCORE) : 0;
-        snprintf(text, sizeof(text),
-            "Energy Reserve\n\n% d / 100\nSleep %d   Ready %d\nActivity %d kcal\nStress score %d\n\nUp/Down: Switch",
-            g_live_energy_score, g_sleep_comp, g_readiness_comp, active, stress);
+        int base = (g_sleep_comp + g_readiness_comp) / 2;
+        int cardiac = g_card_eff_comp / 10;
+        snprintf(info, sizeof(info),
+                 "Recovery %d   Heart %+d\nActivity -%d  Stress -%d\nCurrent reserve %d/100\nComposite, not daily timeline",
+                 base, cardiac, g_exertion_comp, g_stress_comp,
+                 g_live_energy_score);
     }
-    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                       GRect(8, 8, 184, 208), GTextOverflowModeWordWrap,
+    graphics_draw_text(ctx, info, fonts_get_system_font(VG_FONT_BODY),
+                       GRect(8, 105, 184, 102), GTextOverflowModeWordWrap,
+                       GTextAlignmentCenter, NULL);
+    graphics_draw_text(ctx, "UP/DOWN  Browse", fonts_get_system_font(VG_FONT_HINT),
+                       GRect(10, 207, 180, 19), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
 }
-static void recovery_switch(ClickRecognizerRef recognizer, void *context) {
-    s_show_morning = !s_show_morning;
-    if (s_recovery_layer) layer_mark_dirty(s_recovery_layer);
+static void recovery_up(ClickRecognizerRef recognizer, void *context) {
+    s_recovery_page = (s_recovery_page + 2) % 3;
+    s_last_recovery_page = s_recovery_page;
+    layer_mark_dirty(s_recovery_layer);
+}
+static void recovery_down(ClickRecognizerRef recognizer, void *context) {
+    s_recovery_page = (s_recovery_page + 1) % 3;
+    s_last_recovery_page = s_recovery_page;
+    layer_mark_dirty(s_recovery_layer);
 }
 static void recovery_clicks(void *context) {
-    window_single_click_subscribe(BUTTON_ID_UP, recovery_switch);
-    window_single_click_subscribe(BUTTON_ID_DOWN, recovery_switch);
-    window_single_click_subscribe(BUTTON_ID_SELECT, recovery_switch);
+    window_single_click_subscribe(BUTTON_ID_UP, recovery_up);
+    window_single_click_subscribe(BUTTON_ID_DOWN, recovery_down);
 }
 static void recovery_load(Window *window) {
     s_recovery_layer = layer_create(layer_get_bounds(window_get_root_layer(window)));
@@ -179,8 +234,8 @@ static void recovery_unload(Window *window) {
 }
 static void recovery_open(void) {
     time_t now = time(NULL);
-    s_show_morning = g_sleep_end > 0 && now >= g_sleep_end &&
-                     now - g_sleep_end < 2 * 3600;
+    s_recovery_page = s_last_recovery_page;
+    (void)now;
     window_stack_push(s_recovery_window, true);
 }
 
@@ -221,4 +276,7 @@ void ui_hub_mark_dirty() {
     if (s_hub_drawing_layer && window_is_loaded(s_hub_window)) {
         layer_mark_dirty(s_hub_drawing_layer);
     }
+}
+bool ui_hub_is_visible(void) {
+    return window_stack_get_top_window() == s_hub_window;
 }

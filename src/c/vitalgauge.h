@@ -56,6 +56,20 @@ extern int g_breath_style; // 0: 4-4-4-4, 1: 4-7-8, 2: 4-8
 extern int g_haptic_level; // 0: Off, 1: Low, 2: High
 extern bool g_backlight_stay_on;
 
+// Pebble-inspired shared visual language. Color encodes data in graphs;
+// primary labels stay high-contrast and decorative accent is avoided.
+#define VG_FONT_TITLE FONT_KEY_GOTHIC_24_BOLD
+#define VG_FONT_BODY FONT_KEY_GOTHIC_18_BOLD
+#define VG_FONT_HINT FONT_KEY_GOTHIC_14_BOLD
+#define VG_FONT_NUMBER FONT_KEY_BITHAM_34_MEDIUM_NUMBERS
+static inline GColor vg_foreground(void) {
+    return g_dark_mode ? GColorWhite : GColorBlack;
+}
+static inline GColor vg_background(void) {
+    return g_dark_mode ? GColorBlack : GColorWhite;
+}
+
+
 // ============================================================================
 // --- SECTION 3: SUBSYSTEM DEFINITIONS ---
 // ============================================================================
@@ -78,6 +92,7 @@ void ui_hub_init(void);
 void ui_hub_deinit(void);
 void ui_hub_push(bool animated);
 void ui_hub_mark_dirty(void);
+bool ui_hub_is_visible(void);
 
 void ui_stats_init(void);
 void ui_stats_deinit(void);
@@ -95,6 +110,7 @@ void ui_stress_mark_dirty(void);
 void ui_stress_hrv_update(void);
 int ui_stress_hrv_baseline(int *days);
 int ui_stress_latest_hrv(void);
+time_t ui_stress_latest_hrv_time(void);
 void ui_stress_start_morning(void);
 void ui_stress_start_automatic(void);
 

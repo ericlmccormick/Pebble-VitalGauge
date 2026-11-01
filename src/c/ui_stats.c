@@ -20,7 +20,7 @@ static int s_current_history_view = 0;
 // ============================================================================
 static void activity_update_proc(Layer *layer, GContext *ctx) { 
     graphics_context_set_antialiased(ctx, true);
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
     int steps = (int)health_service_sum_today(HealthMetricStepCount);
@@ -73,20 +73,20 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
     int goal_pct = (steps * 100) / 10000;
     if(goal_pct > 100) goal_pct = 100;
 
-    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);  
-    graphics_draw_text(ctx, "Activity", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+    graphics_context_set_text_color(ctx, vg_foreground());  
+    graphics_draw_text(ctx, "ACTIVITY", fonts_get_system_font(VG_FONT_TITLE), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char top_buf[32];
     snprintf(top_buf, sizeof(top_buf), "Goal: %d%%\n%d Steps", goal_pct, steps);
-    graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+    graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
                        GRect(0, 40, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     int y_start = 88;
     int y_step = 22;
     int x_sq = 45;
     int x_txt = 65;
-    GFont row_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    GFont row_font = fonts_get_system_font(VG_FONT_BODY);
 
     graphics_context_set_fill_color(ctx, GColorRed);
     graphics_fill_rect(ctx, GRect(x_sq, y_start + 6, 10, 10), 0, GCornerNone);
@@ -130,7 +130,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Enable antialiasing for smoother rendering
     graphics_context_set_antialiased(ctx, true);
     // Set background color to white
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     // Paint physical background canvas
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
@@ -220,9 +220,9 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     }
 
     // Set text color to black for header
-    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+    graphics_context_set_text_color(ctx, vg_foreground());
     // Draw the "Sleep" section title
-    graphics_draw_text(ctx, "Sleep", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+    graphics_draw_text(ctx, "SLEEP", fonts_get_system_font(VG_FONT_TITLE), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Initialize buffer for the top readout block, expanded to 128 to prevent string truncation
@@ -234,7 +234,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     if (!g_sleep_data_available) {
         snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\nCheck Pebble Health sync");
     }
-    graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+    graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
                        GRect(0, 38, 200, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Calculate total net sleep in seconds
@@ -253,7 +253,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Define the horizontal coordinate for the text labels
     int x_txt = 65;
     // Load the standard font for the list rows
-    GFont row_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    GFont row_font = fonts_get_system_font(VG_FONT_BODY);
     
     // Set context color to deep blue for deep sleep indicator
     graphics_context_set_fill_color(ctx, GColorDukeBlue);
@@ -297,7 +297,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
 // ============================================================================
 static void history_update_proc(Layer *layer, GContext *ctx) { 
     graphics_context_set_antialiased(ctx, true);
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
     char *title = "";
@@ -308,8 +308,8 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
     else if (s_current_history_view == 2) { title = "Stress Trend"; data_arr = g_hist_stress; }
     else if (s_current_history_view == 3) { title = "Activity Trend"; data_arr = g_hist_activity; }
 
-    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-    graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+    graphics_context_set_text_color(ctx, vg_foreground());
+    graphics_draw_text(ctx, title, fonts_get_system_font(VG_FONT_TITLE), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     int sum = 0, valid_days = 0, bar_w = 16, spacing = 6;
@@ -343,7 +343,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
         if (i == 6) snprintf(day_lbl, sizeof(day_lbl), "T");
         else snprintf(day_lbl, sizeof(day_lbl), "-%d", 6-i);
 
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, day_lbl, fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(x - 4, base_y + 2, bar_w + 8, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     }
@@ -351,11 +351,11 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
     int avg = valid_days > 0 ? sum / valid_days : 0;
     char avg_buf[32];
     snprintf(avg_buf, sizeof(avg_buf), "7-Day Avg: %d", avg);
-    graphics_draw_text(ctx, avg_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+    graphics_draw_text(ctx, avg_buf, fonts_get_system_font(VG_FONT_BODY),
                        GRect(0, 42, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
-    graphics_context_set_text_color(ctx, GColorDarkGray);
-    graphics_draw_text(ctx, "[Up/Dn]: Cycle  [Sel]: Back", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
+    graphics_context_set_text_color(ctx, vg_foreground());
+    graphics_draw_text(ctx, "UP/DOWN  Browse     BACK  Return", fonts_get_system_font(VG_FONT_HINT), 
                        GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
@@ -364,7 +364,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
 // ============================================================================
 static void battery_update_proc(Layer *layer, GContext *ctx) { 
     graphics_context_set_antialiased(ctx, true);
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
     int p_end = (g_live_energy_score * 856) / 100;
@@ -376,8 +376,8 @@ static void battery_update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_fill_color(ctx, c);
     graphics_fill_circle(ctx, get_perimeter_point(p_end, 10), 6);
 
-    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-    graphics_draw_text(ctx, "Energy Reserve", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
+    graphics_context_set_text_color(ctx, vg_foreground());
+    graphics_draw_text(ctx, "ENERGY RESERVE", fonts_get_system_font(VG_FONT_TITLE), 
                        GRect(0, 5, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char pct_buf[16];
@@ -389,7 +389,7 @@ static void battery_update_proc(Layer *layer, GContext *ctx) {
     snprintf(buf, sizeof(buf), "+ Sleep Score: %d\n+ Readiness Score: %d\n+ Cardiac Efficiency: %d\n- Exertion Drain: %d\n- Stress Penalty: %d", 
              g_sleep_comp, g_readiness_comp, g_card_eff_comp / 10, g_exertion_comp, g_stress_comp);
 
-    graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+    graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_BODY), 
                        GRect(5, 75, 190, 150), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
@@ -415,7 +415,6 @@ static void history_select_handler(ClickRecognizerRef recognizer, void *context)
 static void history_click_config_provider(void *context) {
     window_single_click_subscribe(BUTTON_ID_UP, history_up_handler);
     window_single_click_subscribe(BUTTON_ID_DOWN, history_down_handler);
-    window_single_click_subscribe(BUTTON_ID_SELECT, history_select_handler);
     window_single_click_subscribe(BUTTON_ID_BACK, history_select_handler);
 }
 
@@ -432,10 +431,10 @@ static void bat_load(Window *w) { s_battery_canvas = layer_create(layer_get_boun
 static void bat_unload(Window *w) { layer_destroy(s_battery_canvas); }
 
 void ui_stats_init() {
-    s_activity_window = window_create(); window_set_window_handlers(s_activity_window, (WindowHandlers){ .load = act_load, .unload = act_unload }); window_set_background_color(s_activity_window, GColorWhite);
-    s_sleep_window = window_create(); window_set_window_handlers(s_sleep_window, (WindowHandlers){ .load = slp_load, .unload = slp_unload }); window_set_background_color(s_sleep_window, GColorWhite);
-    s_history_window = window_create(); window_set_window_handlers(s_history_window, (WindowHandlers){ .load = his_load, .unload = his_unload }); window_set_background_color(s_history_window, GColorWhite);
-    s_battery_window = window_create(); window_set_window_handlers(s_battery_window, (WindowHandlers){ .load = bat_load, .unload = bat_unload }); window_set_background_color(s_battery_window, GColorWhite);
+    s_activity_window = window_create(); window_set_window_handlers(s_activity_window, (WindowHandlers){ .load = act_load, .unload = act_unload }); window_set_background_color(s_activity_window, vg_background());
+    s_sleep_window = window_create(); window_set_window_handlers(s_sleep_window, (WindowHandlers){ .load = slp_load, .unload = slp_unload }); window_set_background_color(s_sleep_window, vg_background());
+    s_history_window = window_create(); window_set_window_handlers(s_history_window, (WindowHandlers){ .load = his_load, .unload = his_unload }); window_set_background_color(s_history_window, vg_background());
+    s_battery_window = window_create(); window_set_window_handlers(s_battery_window, (WindowHandlers){ .load = bat_load, .unload = bat_unload }); window_set_background_color(s_battery_window, vg_background());
 }
 
 void ui_stats_deinit() {

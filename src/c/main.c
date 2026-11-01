@@ -5,6 +5,7 @@
 // ============================================================================
 static AppTimer *s_health_refresh_timer;
 static bool s_health_subscribed;
+static AppTimer *s_initial_sync_timer;
 #define MORNING_SCAN_DAY_KEY 412
 #define HRV_WORKER_LAUNCH_CONTEXT_KEY 414
 #define HRV_REST_PENDING_KEY 416
@@ -45,15 +46,21 @@ static void health_event_cb(HealthEventType event, void *context) {
     }
     if (event != HealthEventSleepUpdate &&
         event != HealthEventSignificantUpdate) return;
+    // The pending initial sync already includes sleep and significant updates.
+    if (s_initial_sync_timer) return;
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
-    s_health_refresh_timer = app_timer_register(750, health_refresh_cb, NULL);
+    s_health_refresh_timer = app_timer_register(2500, health_refresh_cb, NULL);
 }
 
 static void initial_sync_timer_cb(void *data) {
+    s_initial_sync_timer = NULL;
+    if (window_stack_get_top_window() != NULL && !ui_hub_is_visible()) {
+        s_initial_sync_timer = app_timer_register(8000, initial_sync_timer_cb, NULL);
+        return;
+    }
     health_engine_update_buffers();
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
-    morning_scan_maybe_start();
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
@@ -117,12 +124,13 @@ static void init(void) {
         } else ui_stress_start_automatic();
     } else {
         ui_hub_push(true);
-        app_timer_register(500, initial_sync_timer_cb, NULL);
+        s_initial_sync_timer = app_timer_register(6000, initial_sync_timer_cb, NULL);
     }
 }
 
 static void deinit(void) {
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
+    if (s_initial_sync_timer) app_timer_cancel(s_initial_sync_timer);
     if (s_health_subscribed) health_service_events_unsubscribe();
     tick_timer_service_unsubscribe();
     app_glance_reload(app_glance_callback, NULL);

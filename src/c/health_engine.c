@@ -189,10 +189,15 @@ void health_engine_update_buffers() {
     int motion_records = 0;
     for (int c = 0; c < 6; c++) {
         time_t chunk_start = g_24h_start + (c * CHUNK_SIZE * 60), chunk_end = chunk_start + (CHUNK_SIZE * 60);
-        uint32_t fetched = health_service_get_minute_history(chunk, CHUNK_SIZE, &chunk_start, &chunk_end);
+        time_t requested_start = chunk_start;
+        time_t requested_end = chunk_end;
+        uint32_t fetched = health_service_get_minute_history(chunk, CHUNK_SIZE,
+                                                               &chunk_start, &chunk_end);
+        int chunk_valid = 0;
         for (uint32_t i = 0; i < fetched; i++) {
             if (chunk[i].is_invalid) continue;
             ++valid_minute_records;
+            ++chunk_valid;
             int slot = (int)((chunk_start + (time_t)i * 60 - g_24h_start) / 60);
             if (slot >= 0 && slot < 1440) {
                 s_valid_motion[slot] = 1;
@@ -207,6 +212,11 @@ void health_engine_update_buffers() {
             if (b >= 0 && b < 144) { g_act_map[b] += chunk[i].steps; if (chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = chunk[i].heart_rate_bpm; }
             if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (chunk[i].heart_rate_bpm > 0 && chunk[i].vmc == 0 && chunk[i].heart_rate_bpm < m_hr) m_hr = chunk[i].heart_rate_bpm;
         }
+        APP_LOG(APP_LOG_LEVEL_INFO,
+                "MINUTE_CHUNK %d req=%ld..%ld actual=%ld..%ld returned=%lu valid=%d",
+                c, (long)requested_start, (long)requested_end,
+                (long)chunk_start, (long)chunk_end,
+                (unsigned long)fetched, chunk_valid);
     }
     // Rebuild the entire night from minute data. Native Pebble sessions are
     // anchors, not the final authority. Orientation changes are deliberately

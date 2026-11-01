@@ -123,7 +123,9 @@ static int hrv_baseline_ms(int *eligible_count) {
         if (!better_same_day) good[count++] = r->rmssd;
     }
     *eligible_count = count;
-    persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
+    if (!persist_exists(HRV_CALIBRATION_DAYS_KEY) ||
+        persist_read_int(HRV_CALIBRATION_DAYS_KEY) != count)
+        persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
     if (count < HRV_BASELINE_MIN) return 0;
     for (int i = 1; i < count; ++i) {
         uint16_t v = good[i]; int j = i;

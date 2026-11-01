@@ -19,12 +19,26 @@ static void health_handler(HealthEventType event, void *context) {
     time_t now = time(NULL);
     HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateBPM);
     HealthActivityMask activity = health_service_peek_current_activities();
-    bool exercising = (activity & (HealthActivityRun | HealthActivityWalk |
-                                    HealthActivityOpenWorkout)) != 0;
-    // Recent steps are a coarse activity filter; activity flags take priority.
+    // Model expected HR from recent exertion rather than vetoing activity.
+    // These are conservative heuristic thresholds and should be personalized
+    // after a baseline is established. Walking never automatically disqualifies.
     HealthValue recent_steps = health_service_sum(HealthMetricStepCount,
                                                    now - 600, now);
-    if (bpm <= AUTO_HR_THRESHOLD || exercising || recent_steps > 100) {
+    int trigger_bpm = AUTO_HR_THRESHOLD;
+    if (recent_steps > 100 && recent_steps <= 500) trigger_bpm += 10;
+    else if (recent_steps > 500 && recent_steps <= 1000) trigger_bpm += 20;
+    else if (recent_steps > 1000) trigger_bpm += 30;
+
+    if (activity & HealthActivityWalk) {
+        if (trigger_bpm < 110) trigger_bpm = 110;
+    }
+    if (activity & (HealthActivityRun | HealthActivityOpenWorkout)) {
+        if (trigger_bpm < 140) trigger_bpm = 140;
+    }
+
+    // Suspicious means above what this coarse activity estimate explains.
+    // Keep two-minute confirmation and the existing 30-minute cooldown.
+    if (bpm <= trigger_bpm || bpm <= 0) {
         s_elevated_since = 0;
         return;
     }

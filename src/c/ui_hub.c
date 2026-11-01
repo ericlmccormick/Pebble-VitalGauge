@@ -165,12 +165,12 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
     graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
     graphics_context_set_text_color(ctx, vg_foreground());
-    if (s_recovery_page == 2) energy_contribution_perimeter(ctx);
-    const char *titles[] = {"ENERGY RESERVE", "MORNING RECOVERY", "ENERGY CONTRIBUTORS"};
+    if (s_recovery_page == 0 || s_recovery_page == 1) energy_contribution_perimeter(ctx);
+    const char *titles[] = {"ENERGY RESERVE", "ENERGY CONTRIBUTORS", "MORNING RECOVERY"};
     graphics_draw_text(ctx, titles[s_recovery_page], fonts_get_system_font(VG_FONT_TITLE),
                        GRect(4, 8, 192, 32), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
-    int primary = s_recovery_page == 1 ? g_readiness_comp : g_live_energy_score;
+    int primary = s_recovery_page == 2 ? g_readiness_comp : g_live_energy_score;
     char number[20];
     snprintf(number, sizeof(number), "%d", primary);
     graphics_draw_text(ctx, number, fonts_get_system_font(VG_FONT_NUMBER),
@@ -181,7 +181,7 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
         int kcal = (int)health_service_sum_today(HealthMetricActiveKCalories);
         snprintf(info, sizeof(info), "Sleep %d   Ready %d\nActive %d kcal\nStress component %d\nActivity drain %d",
                  g_sleep_comp, g_readiness_comp, kcal, g_stress_comp, g_exertion_comp);
-    } else if (s_recovery_page == 1) {
+    } else if (s_recovery_page == 2) {
         int days = 0;
         int baseline = ui_stress_hrv_baseline(&days);
         int latest = ui_stress_latest_hrv();

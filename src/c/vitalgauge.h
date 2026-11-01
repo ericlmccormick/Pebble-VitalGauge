@@ -83,6 +83,7 @@ void ui_stats_init(void);
 void ui_stats_deinit(void);
 void ui_activity_push(void);
 void ui_sleep_push(void);
+void ui_sleep_mark_dirty(void);
 void ui_history_push(void);
 void ui_battery_push(void);
 void ui_battery_mark_dirty(void);

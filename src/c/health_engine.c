@@ -194,7 +194,7 @@ void health_engine_update_buffers() {
             int slot = (int)((chunk_start + (time_t)i * 60 - g_24h_start) / 60);
             if (slot >= 0 && slot < 1440) {
                 s_valid_motion[slot] = 1;
-                s_minute_hr[slot] = chunk[i].heart_rate_bpm > 255 ? 255 : chunk[i].heart_rate_bpm;
+                s_minute_hr[slot] = chunk[i].heart_rate_bpm;
                 // Original application used 15 steps and 350 VMC to exclude
                 // movement-heavy periods. Reuse those limits as a veto.
                 s_quiet_motion[slot] = chunk[i].steps <= 15 && chunk[i].vmc <= 350;

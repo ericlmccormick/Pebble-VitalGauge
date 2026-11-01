@@ -92,6 +92,7 @@ void ui_hub_init(void);
 void ui_hub_deinit(void);
 void ui_hub_push(bool animated);
 void ui_hub_mark_dirty(void);
+bool ui_hub_is_visible(void);
 
 void ui_stats_init(void);
 void ui_stats_deinit(void);

@@ -447,6 +447,10 @@ void ui_stats_deinit() {
 
 void ui_activity_push() { window_stack_push(s_activity_window, true); }
 void ui_sleep_push() { window_stack_push(s_sleep_window, true); }
+void ui_sleep_mark_dirty(void) {
+    if (s_sleep_canvas && window_is_loaded(s_sleep_window))
+        layer_mark_dirty(s_sleep_canvas);
+}
 void ui_history_push() { window_stack_push(s_history_window, true); }
 void ui_battery_push() { window_stack_push(s_battery_window, true); }
 

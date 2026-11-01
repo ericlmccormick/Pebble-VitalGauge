@@ -93,6 +93,9 @@ void ui_stress_deinit(void);
 void ui_stress_push(void);
 void ui_stress_mark_dirty(void);
 void ui_stress_hrv_update(void);
+int ui_stress_hrv_baseline(int *days);
+int ui_stress_latest_hrv(void);
+void ui_stress_start_morning(void);
 void ui_stress_start_automatic(void);
 
 void ui_settings_init(void);

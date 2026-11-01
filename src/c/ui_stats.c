@@ -309,7 +309,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
     else if (s_current_history_view == 3) { title = "Activity Trend"; data_arr = g_hist_activity; }
 
     graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-    graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+    graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     int sum = 0, valid_days = 0, bar_w = 16, spacing = 6;
@@ -354,7 +354,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
     graphics_draw_text(ctx, avg_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                        GRect(0, 42, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
-    graphics_context_set_text_color(ctx, GColorDarkGray);
+    graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
     graphics_draw_text(ctx, "UP/DOWN  Browse     BACK  Return", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
                        GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }

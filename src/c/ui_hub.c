@@ -71,7 +71,7 @@ static void hub_click_config_provider(void *context) {
 // ============================================================================
 static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) { 
   graphics_context_set_antialiased(ctx, true);
-  graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+  graphics_context_set_fill_color(ctx, vg_background());
   graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
   int center_x = 100, center_y = 114, ring_thickness = 14, ring_spacing = 18;
@@ -100,32 +100,32 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   graphics_fill_radial(ctx, rect_stress, GOvalScaleModeFitCircle, ring_thickness, 0, DEG_TO_TRIGANGLE((stress_val * 360) / 100));
 
   int tag_h = 28;
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GFont font = fonts_get_system_font(VG_FONT_TITLE);
   
   graphics_context_set_fill_color(ctx, GColorPictonBlue);
   graphics_fill_rect(ctx, GRect(0, 0, 56, tag_h), 0, GCornerNone); 
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+  graphics_context_set_text_color(ctx, vg_foreground());
   graphics_draw_text(ctx, "Stress", font, GRect(0, -4, 54, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   graphics_context_set_fill_color(ctx, GColorJaegerGreen);
   graphics_fill_rect(ctx, GRect(130, 0, 70, tag_h), 0, GCornerNone);
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack); 
+  graphics_context_set_text_color(ctx, vg_foreground()); 
   graphics_draw_text(ctx, "Activity", font, GRect(130, -4, 68, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   graphics_context_set_fill_color(ctx, GColorChromeYellow); 
   graphics_fill_rect(ctx, GRect(0, 200, 75, tag_h), 0, GCornerNone);
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+  graphics_context_set_text_color(ctx, vg_foreground());
   graphics_draw_text(ctx, "Trends", font, GRect(0, 196, 73, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   graphics_context_set_fill_color(ctx, GColorVividViolet);
   graphics_fill_rect(ctx, GRect(152, 200, 48, tag_h), 0, GCornerNone);
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack); 
+  graphics_context_set_text_color(ctx, vg_foreground()); 
   graphics_draw_text(ctx, "Sleep", font, GRect(154, 196, 44, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
   char energy_text[8];
   snprintf(energy_text, sizeof(energy_text), "%d", g_live_energy_score); 
-  graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-  graphics_draw_text(ctx, energy_text, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS), 
+  graphics_context_set_text_color(ctx, vg_foreground());
+  graphics_draw_text(ctx, energy_text, fonts_get_system_font(VG_FONT_NUMBER), 
                      GRect(center_x - 30, center_y - 20, 60, 40), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
@@ -133,18 +133,18 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
 // Energy / recovery detail area. The center of the existing rings is its
 // entry point; Up/Down switches pages and Back returns to the dashboard.
 static void recovery_draw(Layer *layer, GContext *ctx) {
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
-    GColor fg = g_dark_mode ? GColorWhite : GColorBlack;
+    GColor fg = vg_foreground();
     graphics_context_set_text_color(ctx, fg);
     const char *heading = s_show_morning ? "MORNING RECOVERY" : "ENERGY RESERVE";
-    graphics_draw_text(ctx, heading, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+    graphics_draw_text(ctx, heading, fonts_get_system_font(VG_FONT_BODY),
                        GRect(8, 10, 184, 30), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
     int value = s_show_morning ? g_readiness_comp : g_live_energy_score;
     char number[16];
     snprintf(number, sizeof(number), "%d", value);
-    graphics_draw_text(ctx, number, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS),
+    graphics_draw_text(ctx, number, fonts_get_system_font(VG_FONT_NUMBER),
                        GRect(36, 44, 128, 48), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
     char details[160];
@@ -168,11 +168,11 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
                  "Sleep %d  Ready %d\nActive %d kcal\nReserve updates during day",
                  g_sleep_comp, g_readiness_comp, kcal);
     }
-    graphics_draw_text(ctx, details, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+    graphics_draw_text(ctx, details, fonts_get_system_font(VG_FONT_BODY),
                        GRect(12, 105, 176, 90), GTextOverflowModeWordWrap,
                        GTextAlignmentCenter, NULL);
     graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, "UP/DOWN  Change view", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+    graphics_draw_text(ctx, "UP/DOWN  Change view", fonts_get_system_font(VG_FONT_HINT),
                        GRect(10, 202, 180, 20), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
 }

@@ -222,7 +222,8 @@ static void unified_timer_callback(void *data) {
         // Decrement scan ticks and check if it has reached zero
         if (--s_scan_ticks <= 0) { 
             // Stop the scan flag
-            s_is_scanning = false; 
+            s_is_scanning = false;
+            hrv_end(); 
             // Hide the EKG graphical layer
             layer_set_hidden(s_ekg_layer, true); 
             // Turn off the active heart rate sampling
@@ -445,6 +446,13 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         // Configure context and render countdown
         graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                            GRect(10, 150, 180, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+        if (s_hrv_count >= 20) {
+            snprintf(buf, sizeof(buf), "RMSSD: %d ms", s_hrv_rmssd);
+            graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+                               GRect(10, 192, 180, 28), GTextOverflowModeWordWrap,
+                               GTextAlignmentCenter, NULL);
+        }
+
 
     // Render default informational view if idle
     } else { 
@@ -593,6 +601,63 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 // ============================================================================
 // --- SECTION 6: CONTROL LOGIC (ui_stress.c) ---
 // ============================================================================
+
+#define HRV_SAMPLES 60
+static uint16_t s_hrv_intervals[HRV_SAMPLES];
+static uint8_t s_hrv_count;
+static int s_hrv_rmssd;
+static bool s_hrv_active;
+
+static uint32_t hrv_sqrt(uint32_t n) {
+    uint32_t r = 0, bit = (uint32_t)1 << 30;
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
+static void hrv_begin(void) {
+    memset(s_hrv_intervals, 0, sizeof(s_hrv_intervals));
+    s_hrv_count = 0;
+    s_hrv_rmssd = 0;
+    s_hrv_active = health_service_set_hrv_sample_period(1);
+}
+
+static void hrv_end(void) {
+    if (s_hrv_active) health_service_set_hrv_sample_period(0);
+    s_hrv_active = false;
+}
+
+void ui_stress_hrv_update(void) {
+    if (!s_hrv_active || !s_is_scanning) return;
+    uint16_t ppi = health_service_peek_hrv_ppi_ms();
+    if (ppi < 400 || ppi > 1500) return;
+    if (s_hrv_count) {
+        uint16_t previous = s_hrv_intervals[s_hrv_count - 1];
+        if ((int)ppi - (int)previous > 250 ||
+            (int)previous - (int)ppi > 250) return;
+    }
+    if (s_hrv_count < HRV_SAMPLES) {
+        s_hrv_intervals[s_hrv_count++] = ppi;
+    } else {
+        memmove(s_hrv_intervals, s_hrv_intervals + 1,
+                (HRV_SAMPLES - 1) * sizeof(uint16_t));
+        s_hrv_intervals[HRV_SAMPLES - 1] = ppi;
+    }
+    if (s_hrv_count >= 20) {
+        uint32_t sum = 0;
+        for (int i = 1; i < s_hrv_count; ++i) {
+            int d = (int)s_hrv_intervals[i] - s_hrv_intervals[i - 1];
+            sum += (uint32_t)(d * d);
+        }
+        s_hrv_rmssd = (int)hrv_sqrt(sum / (s_hrv_count - 1));
+    }
+    ui_stress_mark_dirty();
+}
+
 static void start_breathing_session() {
     s_show_breath_summary = false; s_is_breathing = true; 
     s_session_time_left = 300; memset(s_bpm_samples, 0, sizeof(s_bpm_samples)); s_current_stress = -1;
@@ -618,12 +683,13 @@ static void stress_select_handler(ClickRecognizerRef recognizer, void *context) 
     } else if (s_is_scanning || s_is_breathing) { 
         s_is_scanning = false; s_is_breathing = false;
         if (s_ekg_layer) layer_set_hidden(s_ekg_layer, true);
-        audio_engine_stop(); health_service_set_heart_rate_sample_period(0);
+        audio_engine_stop(); hrv_end(); health_service_set_heart_rate_sample_period(0);
         if (g_backlight_stay_on) light_enable(false);
         if (s_radius_animation) { animation_unschedule(s_radius_animation); s_radius = 20; }
         if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
     } else {
         s_is_scanning = true;
+        hrv_begin();
         if (s_ekg_layer) layer_set_hidden(s_ekg_layer, false);
         s_scan_ticks = 60; memset(s_bpm_samples, 0, sizeof(s_bpm_samples));
         health_service_set_heart_rate_sample_period(1);
@@ -669,7 +735,7 @@ static void stress_back_handler(ClickRecognizerRef recognizer, void *context) {
     if (s_is_breathing || s_is_scanning || s_show_breath_summary) {
         s_is_breathing = false; s_is_scanning = false; s_show_breath_summary = false;
         if (s_ekg_layer) layer_set_hidden(s_ekg_layer, true);
-        audio_engine_stop(); health_service_set_heart_rate_sample_period(0);
+        audio_engine_stop(); hrv_end(); health_service_set_heart_rate_sample_period(0);
         if (g_backlight_stay_on) light_enable(false);
         if (s_radius_animation) { animation_unschedule(s_radius_animation); s_radius = 20; }
         if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
@@ -710,7 +776,8 @@ static void stress_view_load(Window *w) {
     window_set_click_config_provider(w, stress_click_config_provider);
 }
 
-static void stress_view_unload(Window *w) { 
+static void stress_view_unload(Window *w) {
+    hrv_end(); 
     audio_engine_stop();
     layer_destroy(s_ekg_layer);
     layer_destroy(s_stress_canvas);

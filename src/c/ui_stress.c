@@ -632,12 +632,12 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
                            GRect(10, 30, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format countdown string into buffer
-        snprintf(buf, sizeof(buf), "Scanning...\n%d sec", s_scan_ticks);
+        snprintf(buf, sizeof(buf), "MEASURING HRV\n%d sec", s_scan_ticks);
         // Configure context and render countdown
         graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                            GRect(10, 150, 180, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
         if (s_hrv_delta_count >= 20) {
-            snprintf(buf, sizeof(buf), "RMSSD: %d ms (%d beats)", s_hrv_rmssd, (int)s_hrv_accepted_total);
+            snprintf(buf, sizeof(buf), "HRV %d ms  |  %d beats", s_hrv_rmssd, (int)s_hrv_accepted_total);
             graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                                GRect(10, 192, 180, 28), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
@@ -735,7 +735,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         
         // Configure context and render title
         graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, "Stress", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+        graphics_draw_text(ctx, "STRESS", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                            GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format and render current score and live BPM
@@ -798,7 +798,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 
         // Render instructional menu at the bottom of the display
         graphics_context_set_text_color(ctx, GColorDarkGray);
-        graphics_draw_text(ctx, "[Sel]: Scan  [Up/Dn]: Breathe", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
+        graphics_draw_text(ctx, "SELECT Scan    UP/DOWN Breathe", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
                            GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     } 
 }

@@ -10,6 +10,7 @@ static void health_refresh_cb(void *data) {
     s_health_refresh_timer = NULL;
     health_engine_update_buffers();
     ui_hub_mark_dirty();
+    ui_sleep_mark_dirty();
 }
 
 static void health_event_cb(HealthEventType event, void *context) {
@@ -22,6 +23,7 @@ static void health_event_cb(HealthEventType event, void *context) {
 static void initial_sync_timer_cb(void *data) {
     health_engine_update_buffers();
     ui_hub_mark_dirty();
+    ui_sleep_mark_dirty();
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {

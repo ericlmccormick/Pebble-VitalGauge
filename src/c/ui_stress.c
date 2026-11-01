@@ -140,7 +140,7 @@ static void hrv_save_completed(int bpm) {
             s_hrv_rmssd, quality, s_hrv_count, s_hrv_rejected, s_auto_scan);
     // Legacy BPM-range scoring remains until baseline is calibrated.
     int n = 0, baseline = hrv_baseline_ms(&n);
-    if (baseline > 0 && quality == 2 && !s_auto_scan) {
+    if (baseline > 0 && quality == 2) {
         int score = 50 + ((s_hrv_rmssd - baseline) * 100) / baseline;
         if (score < 10) score = 10;
         if (score > 100) score = 100;
@@ -181,7 +181,7 @@ void ui_stress_hrv_update(void) {
     uint16_t ppi = health_service_peek_hrv_ppi_ms();
     ++s_hrv_received;
     time_t event_time = time(NULL);
-    if (ppi < 400 || ppi > 1500) { ++s_hrv_rejected; s_hrv_last_event = 0; return; }
+    if (ppi < 400 || ppi > 1500) { ++s_hrv_rejected; s_hrv_last_event = 0; s_hrv_count = 0; return; }
     if (s_hrv_last_event && event_time - s_hrv_last_event > 3) {
         // Avoid an RMSSD delta across a gap in heartbeat reports.
         s_hrv_count = 0;
@@ -390,8 +390,7 @@ static void unified_timer_callback(void *data) {
             int eligible = 0;
             int baseline = hrv_baseline_ms(&eligible);
             if (!(baseline > 0 && s_hrv_count >= HRV_QUALITY_MIN &&
-                  s_hrv_received > 0 && (int)s_hrv_rejected * 10 <= s_hrv_received &&
-                  !s_auto_scan)) {
+                  s_hrv_received > 0 && (int)s_hrv_rejected * 10 <= s_hrv_received)) {
                 persist_write_int(PERSIST_KEY_SCORE, (score < 10) ? 10 : (score > 100 ? 100 : score));
             }
             

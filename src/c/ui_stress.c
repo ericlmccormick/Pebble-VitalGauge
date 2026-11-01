@@ -61,10 +61,115 @@ static const struct EKGPoint ekg_pts[] = {
 };
 
 #define HRV_SAMPLES 60
+static uint32_t hrv_sqrt(uint32_t n);
+static void start_stress_scan(bool automatic);
+static uint32_t s_hrv_delta_squares;
+static uint16_t s_hrv_delta_count;
+static uint16_t s_hrv_accepted_total;
+static uint16_t s_hrv_previous;
 static uint16_t s_hrv_intervals[HRV_SAMPLES];
 static uint8_t s_hrv_count;
 static int s_hrv_rmssd;
 static bool s_hrv_active;
+// HRV history: compact fixed-size circular log (~192 bytes).
+// Baseline uses only good manual scans, not elevated-HR auto-trigger scans.
+#define HRV_HISTORY_KEY 410
+#define HRV_HISTORY_CAP 16
+#define HRV_CALIBRATION_DAYS_KEY 413
+#define HRV_REST_PENDING_KEY 416
+#define HRV_QUALITY_MIN 40
+#define HRV_BASELINE_MIN 7
+typedef struct {
+    uint32_t timestamp;
+    uint16_t rmssd;
+    uint16_t bpm;
+    uint8_t accepted;
+    uint8_t rejected;
+    uint8_t quality; // 0 poor, 1 fair, 2 good
+    uint8_t automatic;
+} HRVRecord;
+static HRVRecord s_hrv_history[HRV_HISTORY_CAP];
+static uint8_t s_hrv_count_history;
+static uint8_t s_scan_context; // 0 manual, 1 elevated pulse, 2 morning recovery
+#define HRV_MORNING_DAY_KEY 411
+static uint8_t s_hrv_rejected;
+static uint8_t s_hrv_received;
+static time_t s_hrv_last_event;
+
+static int hrv_baseline_ms(int *eligible_count) {
+    uint16_t good[HRV_HISTORY_CAP];
+    int count = 0;
+    time_t limit = time(NULL) - 30 * 86400;
+    // Keep previously saved good manual scans (context 0) eligible while
+    // preferentially selecting a good morning scan (context 2) per day.
+    // Elevated-HR scans (context 1) never establish resting baseline.
+    for (int i = 0; i < s_hrv_count_history; ++i) {
+        HRVRecord *r = &s_hrv_history[i];
+        if (r->quality != 2 || r->automatic == 1 ||
+            r->timestamp < (uint32_t)limit) continue;
+        bool better_same_day = false;
+        for (int j = 0; j < s_hrv_count_history; ++j) {
+            if (i == j) continue;
+            HRVRecord *other = &s_hrv_history[j];
+            if (other->quality != 2 || other->automatic == 1 ||
+                other->timestamp < (uint32_t)limit ||
+                other->timestamp / 86400 != r->timestamp / 86400) continue;
+            if ((other->automatic == 2 && r->automatic != 2) ||
+                (other->automatic == r->automatic && j > i)) {
+                better_same_day = true;
+                break;
+            }
+        }
+        if (!better_same_day) good[count++] = r->rmssd;
+    }
+    *eligible_count = count;
+    if (!persist_exists(HRV_CALIBRATION_DAYS_KEY) ||
+        persist_read_int(HRV_CALIBRATION_DAYS_KEY) != count)
+        persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
+    if (count < HRV_BASELINE_MIN) return 0;
+    for (int i = 1; i < count; ++i) {
+        uint16_t v = good[i]; int j = i;
+        while (j > 0 && good[j - 1] > v) { good[j] = good[j - 1]; --j; }
+        good[j] = v;
+    }
+    return good[count / 2];
+}
+
+static void hrv_save_completed(int bpm) {
+    if (!s_hrv_active || s_hrv_delta_count < 20 || s_hrv_rmssd <= 0) return;
+    int rejected_percent = s_hrv_received ?
+        ((int)s_hrv_rejected * 100 / s_hrv_received) : 100;
+    // Quality is conservative until consecutive PPI continuity can be verified.
+    uint8_t quality = (s_hrv_delta_count >= HRV_QUALITY_MIN &&
+                       rejected_percent <= 10) ? 2 :
+                      (s_hrv_delta_count >= 20 && rejected_percent <= 25) ? 1 : 0;
+    if (s_hrv_count_history >= HRV_HISTORY_CAP) {
+        memmove(s_hrv_history, s_hrv_history + 1,
+                (HRV_HISTORY_CAP - 1) * sizeof(HRVRecord));
+        s_hrv_count_history = HRV_HISTORY_CAP - 1;
+    }
+    HRVRecord *record = &s_hrv_history[s_hrv_count_history++];
+    *record = (HRVRecord){.timestamp=(uint32_t)time(NULL),
+        .rmssd=(uint16_t)s_hrv_rmssd, .bpm=(uint16_t)(bpm > 0 ? bpm : 0),
+        .accepted=(uint8_t)(s_hrv_accepted_total > 255 ? 255 : s_hrv_accepted_total), .rejected=s_hrv_rejected,
+        .quality=quality, .automatic=s_scan_context};
+    persist_write_data(HRV_HISTORY_KEY, s_hrv_history,
+                       s_hrv_count_history * sizeof(HRVRecord));
+    if (s_scan_context == 2) persist_delete(HRV_REST_PENDING_KEY);
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "HRV completed RMSSD=%d quality=%d accepted=%d rejected=%d auto=%d",
+            s_hrv_rmssd, quality, s_hrv_accepted_total, s_hrv_rejected, s_scan_context);
+    // Legacy BPM-range scoring remains until baseline is calibrated.
+    int n = 0, baseline = hrv_baseline_ms(&n);
+    if (baseline > 0 && quality == 2) {
+        int score = 50 + ((s_hrv_rmssd - baseline) * 100) / baseline;
+        if (score < 10) score = 10;
+        if (score > 100) score = 100;
+        persist_write_int(PERSIST_KEY_SCORE, score);
+    }
+}
+
+
 
 static uint32_t hrv_sqrt(uint32_t n) {
     uint32_t r = 0, bit = (uint32_t)1 << 30;
@@ -81,6 +186,13 @@ static void hrv_begin(void) {
     memset(s_hrv_intervals, 0, sizeof(s_hrv_intervals));
     s_hrv_count = 0;
     s_hrv_rmssd = 0;
+    s_hrv_rejected = 0;
+    s_hrv_received = 0;
+    s_hrv_last_event = 0;
+    s_hrv_delta_squares = 0;
+    s_hrv_delta_count = 0;
+    s_hrv_accepted_total = 0;
+    s_hrv_previous = 0;
     s_hrv_active = health_service_set_hrv_sample_period(1);
 }
 
@@ -92,30 +204,51 @@ static void hrv_end(void) {
 void ui_stress_hrv_update(void) {
     if (!s_hrv_active || !s_is_scanning) return;
     uint16_t ppi = health_service_peek_hrv_ppi_ms();
-    if (ppi < 400 || ppi > 1500) return;
-    if (s_hrv_count) {
-        uint16_t previous = s_hrv_intervals[s_hrv_count - 1];
-        if ((int)ppi - (int)previous > 250 ||
-            (int)previous - (int)ppi > 250) return;
+    if (s_hrv_received < 255) ++s_hrv_received;
+    time_t now = time(NULL);
+    if (ppi < 400 || ppi > 1500) {
+        if (s_hrv_rejected < 255) ++s_hrv_rejected;
+        s_hrv_previous = 0;
+        return;
     }
-    if (s_hrv_count < HRV_SAMPLES) {
-        s_hrv_intervals[s_hrv_count++] = ppi;
-    } else {
-        memmove(s_hrv_intervals, s_hrv_intervals + 1,
-                (HRV_SAMPLES - 1) * sizeof(uint16_t));
-        s_hrv_intervals[HRV_SAMPLES - 1] = ppi;
-    }
-    if (s_hrv_count >= 20) {
-        uint32_t sum = 0;
-        for (int i = 1; i < s_hrv_count; ++i) {
-            int d = (int)s_hrv_intervals[i] - s_hrv_intervals[i - 1];
-            sum += (uint32_t)(d * d);
+    // Only differences between adjacent, uninterrupted valid beats count.
+    if (s_hrv_last_event && now - s_hrv_last_event > 3)
+        s_hrv_previous = 0;
+    s_hrv_last_event = now;
+    if (s_hrv_previous) {
+        int delta = (int)ppi - (int)s_hrv_previous;
+        if (delta > 250 || delta < -250) {
+            if (s_hrv_rejected < 255) ++s_hrv_rejected;
+            s_hrv_previous = 0;
+            return;
         }
-        s_hrv_rmssd = (int)hrv_sqrt(sum / (s_hrv_count - 1));
+        s_hrv_delta_squares += (uint32_t)(delta * delta);
+        ++s_hrv_delta_count;
     }
+    s_hrv_previous = ppi;
+    ++s_hrv_accepted_total;
+    // Use all consecutive accepted pairs, not only the last 60 samples.
+    if (s_hrv_delta_count >= 20)
+        s_hrv_rmssd = (int)hrv_sqrt(s_hrv_delta_squares / s_hrv_delta_count);
     ui_stress_mark_dirty();
 }
 
+int ui_stress_hrv_baseline(int *days) {
+    return hrv_baseline_ms(days);
+}
+time_t ui_stress_latest_hrv_time(void) {
+    return s_hrv_count_history ?
+        (time_t)s_hrv_history[s_hrv_count_history - 1].timestamp : 0;
+}
+int ui_stress_latest_hrv(void) {
+    return s_hrv_count_history ?
+        s_hrv_history[s_hrv_count_history - 1].rmssd : 0;
+}
+void ui_stress_start_morning(void) {
+    ui_stress_push();
+    start_stress_scan(true);
+    s_scan_context = 2;
+}
 
 // ============================================================================
 // --- SECTION 2: MATH HELPERS ---
@@ -280,6 +413,7 @@ static void unified_timer_callback(void *data) {
         if (--s_scan_ticks <= 0) { 
             // Stop the scan flag
             s_is_scanning = false;
+            hrv_save_completed((int)bpm);
             hrv_end(); 
             // Hide the EKG graphical layer
             layer_set_hidden(s_ekg_layer, true); 
@@ -292,10 +426,15 @@ static void unified_timer_callback(void *data) {
             // Calculate the stress score based on the variance
             int score = 100 - (hr_range * 8);
             // Constrain the score between 10 and 100, then write to persistent storage
-            persist_write_int(PERSIST_KEY_SCORE, (score < 10) ? 10 : (score > 100 ? 100 : score));
+            int eligible = 0;
+            int baseline = hrv_baseline_ms(&eligible);
+            if (!(baseline > 0 && s_hrv_delta_count >= HRV_QUALITY_MIN &&
+                  s_hrv_received > 0 && (int)s_hrv_rejected * 10 <= s_hrv_received)) {
+                persist_write_int(PERSIST_KEY_SCORE, (score < 10) ? 10 : (score > 100 ? 100 : score));
+            }
             
             // Trigger a double pulse haptic alert if haptics are enabled
-            if (g_haptic_level > 0) vibes_double_pulse(); 
+            if (g_haptic_level > 0 && s_scan_context == 0) vibes_double_pulse(); 
             // Mark the main hub UI for a redraw to update the stress ring
             ui_hub_mark_dirty(); 
         }
@@ -414,7 +553,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
     // Enable antialiasing for smoother rendering
     graphics_context_set_antialiased(ctx, true);
     // Set background color to white
-    graphics_context_set_fill_color(ctx, g_dark_mode ? GColorBlack : GColorWhite);
+    graphics_context_set_fill_color(ctx, vg_background());
     // Paint physical background canvas
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone); 
 
@@ -445,7 +584,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         char* phase_str = (s_breath_phase % 2 == 0) ? ((s_breath_phase==0)?"INHALE":"EXHALE") : "HOLD"; 
         
         // Configure context and render instructional text header
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, phase_str, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
                            GRect(10, 40, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
@@ -456,16 +595,16 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         snprintf(sec_buf, sizeof(sec_buf), "%d", secs);
         
         // Render large countdown number in center of screen
-       graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, sec_buf, fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS), 
+       graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, sec_buf, fonts_get_system_font(VG_FONT_NUMBER), 
                            GRect(10, 95, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Render side menu indicating button functionality for volume control
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, "+", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), GRect(170, 5, 20, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
         char vol_buf[16];
         snprintf(vol_buf, sizeof(vol_buf), "V\n%d", g_volume_level);
-        graphics_draw_text(ctx, vol_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(170, 90, 30, 50), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+        graphics_draw_text(ctx, vol_buf, fonts_get_system_font(VG_FONT_BODY), GRect(170, 90, 30, 50), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
         graphics_draw_text(ctx, "-", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), GRect(170, 190, 20, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Render post-session summary if flagged
@@ -480,8 +619,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
                  s_breath_start_hr, s_breath_end_hr, drop);
                  
         // Configure context and render formatted summary
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(10, 30, 180, 180), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Render diagnostic EKG view if flagged
@@ -494,18 +633,18 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         // Format live BPM readout into buffer
         snprintf(buf, sizeof(buf), "%d BPM", current_bpm);
         // Configure context and render live BPM
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
+        graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
                            GRect(10, 30, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format countdown string into buffer
-        snprintf(buf, sizeof(buf), "Scanning...\n%d sec", s_scan_ticks);
+        snprintf(buf, sizeof(buf), "MEASURING HRV\n%d sec", s_scan_ticks);
         // Configure context and render countdown
-        graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
+        graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(10, 150, 180, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-        if (s_hrv_count >= 20) {
-            snprintf(buf, sizeof(buf), "RMSSD: %d ms", s_hrv_rmssd);
-            graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
+        if (s_hrv_delta_count >= 20) {
+            snprintf(buf, sizeof(buf), "HRV %d ms  |  %d beats", s_hrv_rmssd, (int)s_hrv_accepted_total);
+            graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_BODY),
                                GRect(10, 192, 180, 28), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
         }
@@ -601,20 +740,36 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         int score = persist_exists(PERSIST_KEY_SCORE) ? persist_read_int(PERSIST_KEY_SCORE) : 50; 
         
         // Configure context and render title
-        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-        graphics_draw_text(ctx, "Stress", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, "STRESS", fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format and render current score and live BPM
         char top_buf[64];
-        snprintf(top_buf, sizeof(top_buf), "Score: %d/100\nCurrent: %d BPM", score, live_bpm);
-        graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+        int days = 0;
+        int baseline = hrv_baseline_ms(&days);
+        snprintf(top_buf, sizeof(top_buf), "Score: %d/100  HR: %d\nHRV %s: %d/%d days",
+                 score, live_bpm, baseline ? "ready" : "calibrate",
+                 days, HRV_BASELINE_MIN);
+        graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
                            GRect(0, 38, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
+        if (s_hrv_count_history > 0) {
+            HRVRecord *last = &s_hrv_history[s_hrv_count_history - 1];
+            char hrv_text[60];
+            snprintf(hrv_text, sizeof(hrv_text), "Last HRV %u ms  %s",
+                     (unsigned)last->rmssd,
+                     last->quality == 2 ? "Good" :
+                     last->quality == 1 ? "Fair" : "Poor");
+            graphics_draw_text(ctx, hrv_text,
+                               fonts_get_system_font(VG_FONT_HINT),
+                               GRect(0, 78, 200, 19), GTextOverflowModeWordWrap,
+                               GTextAlignmentCenter, NULL);
+        }
         // Establish layout grid for lower statistics column
-        int y_start = 88;
-        int y_step = 22; int x_sq = 45; int x_txt = 65;
-        GFont row_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+        int y_start = 100;
+        int y_step = 20; int x_sq = 45; int x_txt = 65;
+        GFont row_font = fonts_get_system_font(VG_FONT_BODY);
 
         // Render peak statistics row
         graphics_context_set_fill_color(ctx, GColorRed);
@@ -648,8 +803,8 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         graphics_draw_text(ctx, buf_norm, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
         // Render instructional menu at the bottom of the display
-        graphics_context_set_text_color(ctx, GColorDarkGray);
-        graphics_draw_text(ctx, "[Sel]: Scan  [Up/Dn]: Breathe", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, "SELECT Scan    UP/DOWN Breathe", fonts_get_system_font(VG_FONT_HINT), 
                            GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     } 
 }
@@ -681,6 +836,7 @@ static void start_stress_scan(bool automatic) {
     if (s_is_scanning || s_is_breathing) return;
     s_show_breath_summary = false;
     s_is_scanning = true;
+    s_scan_context = automatic ? 1 : 0;
     hrv_begin();
     if (s_ekg_layer) layer_set_hidden(s_ekg_layer, false);
     s_scan_ticks = 60;
@@ -765,7 +921,7 @@ static void stress_click_config_provider(void *context) {
 // --- SECTION 7: STRESS MODULE LIFECYCLE (ui_stress.c) ---
 // ============================================================================
 static void stress_view_load(Window *w) { 
-    window_set_background_color(w, g_dark_mode ? GColorBlack : GColorWhite);
+    window_set_background_color(w, vg_background());
     s_is_scanning = false; s_is_breathing = false; s_show_breath_summary = false;
     health_service_set_heart_rate_sample_period(0);
     
@@ -796,6 +952,17 @@ static void stress_view_unload(Window *w) {
 }
 
 void ui_stress_init() {
+    s_hrv_count_history = 0;
+    if (persist_exists(HRV_HISTORY_KEY)) {
+        int bytes = persist_get_size(HRV_HISTORY_KEY);
+        if (bytes > 0 && bytes <= (int)sizeof(s_hrv_history) &&
+            bytes % (int)sizeof(HRVRecord) == 0) {
+            int result = persist_read_data(HRV_HISTORY_KEY, s_hrv_history, bytes);
+            if (result == bytes) s_hrv_count_history = bytes / sizeof(HRVRecord);
+        }
+    }
+    int days = 0;
+    hrv_baseline_ms(&days); // Keep worker calibration state synchronized.
     s_stress_window = window_create();
     window_set_window_handlers(s_stress_window, (WindowHandlers){ .load = stress_view_load, .unload = stress_view_unload });
 }

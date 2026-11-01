@@ -5,12 +5,38 @@
 // ============================================================================
 static AppTimer *s_health_refresh_timer;
 static bool s_health_subscribed;
+static AppTimer *s_initial_sync_timer;
+#define MORNING_SCAN_DAY_KEY 412
+#define HRV_WORKER_LAUNCH_CONTEXT_KEY 414
+#define HRV_REST_PENDING_KEY 416
+static void morning_scan_maybe_start(void) {
+    time_t now = time(NULL);
+    if (!g_sleep_data_available || !g_sleep_end || now < g_sleep_end ||
+        now - g_sleep_end > 90 * 60) return;
+    struct tm *date = localtime(&now);
+    if (!date) return;
+    int day = date->tm_year * 366 + date->tm_yday;
+    if (persist_exists(MORNING_SCAN_DAY_KEY) &&
+        persist_read_int(MORNING_SCAN_DAY_KEY) == day) return;
+    // Require a quiet recent 15-minute period; no movement is not proof of rest.
+    HealthValue steps = health_service_sum(HealthMetricStepCount,
+                                          now - 15 * 60, now);
+    HealthActivityMask activity = health_service_peek_current_activities();
+    if (steps < 0 || steps > 15 ||
+        (activity & (HealthActivityWalk | HealthActivityRun |
+                     HealthActivityOpenWorkout))) return;
+    // Set once per day to avoid interruptions and repeated scans.
+    persist_write_int(MORNING_SCAN_DAY_KEY, day);
+    ui_stress_start_morning();
+}
+
 
 static void health_refresh_cb(void *data) {
     s_health_refresh_timer = NULL;
     health_engine_update_buffers();
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
+    // Routine resting HRV collection is handled entirely by the worker.
 }
 
 static void health_event_cb(HealthEventType event, void *context) {
@@ -20,11 +46,18 @@ static void health_event_cb(HealthEventType event, void *context) {
     }
     if (event != HealthEventSleepUpdate &&
         event != HealthEventSignificantUpdate) return;
+    // The pending initial sync already includes sleep and significant updates.
+    if (s_initial_sync_timer) return;
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
-    s_health_refresh_timer = app_timer_register(750, health_refresh_cb, NULL);
+    s_health_refresh_timer = app_timer_register(2500, health_refresh_cb, NULL);
 }
 
 static void initial_sync_timer_cb(void *data) {
+    s_initial_sync_timer = NULL;
+    if (window_stack_get_top_window() != NULL && !ui_hub_is_visible()) {
+        s_initial_sync_timer = app_timer_register(8000, initial_sync_timer_cb, NULL);
+        return;
+    }
     health_engine_update_buffers();
     ui_hub_mark_dirty();
     ui_sleep_mark_dirty();
@@ -79,15 +112,25 @@ static void init(void) {
     app_worker_launch();
 
     if (launch_reason() == APP_LAUNCH_WORKER) {
-        ui_stress_start_automatic();
+        int context = persist_exists(HRV_WORKER_LAUNCH_CONTEXT_KEY) ?
+            persist_read_int(HRV_WORKER_LAUNCH_CONTEXT_KEY) : 1;
+        persist_delete(HRV_WORKER_LAUNCH_CONTEXT_KEY);
+        if (context == 2 && persist_exists(HRV_REST_PENDING_KEY)) {
+            time_t requested = persist_read_int(HRV_REST_PENDING_KEY);
+            persist_delete(HRV_REST_PENDING_KEY);
+            if (requested > 0 && time(NULL) - requested <= 120)
+                ui_stress_start_morning();
+            else ui_hub_push(false);
+        } else ui_stress_start_automatic();
     } else {
         ui_hub_push(true);
-        app_timer_register(500, initial_sync_timer_cb, NULL);
+        s_initial_sync_timer = app_timer_register(6000, initial_sync_timer_cb, NULL);
     }
 }
 
 static void deinit(void) {
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
+    if (s_initial_sync_timer) app_timer_cancel(s_initial_sync_timer);
     if (s_health_subscribed) health_service_events_unsubscribe();
     tick_timer_service_unsubscribe();
     app_glance_reload(app_glance_callback, NULL);

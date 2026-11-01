@@ -236,6 +236,10 @@ void ui_stress_hrv_update(void) {
 int ui_stress_hrv_baseline(int *days) {
     return hrv_baseline_ms(days);
 }
+time_t ui_stress_latest_hrv_time(void) {
+    return s_hrv_count_history ?
+        (time_t)s_hrv_history[s_hrv_count_history - 1].timestamp : 0;
+}
 int ui_stress_latest_hrv(void) {
     return s_hrv_count_history ?
         s_hrv_history[s_hrv_count_history - 1].rmssd : 0;

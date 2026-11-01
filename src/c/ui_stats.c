@@ -79,9 +79,6 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
 
     char top_buf[32];
     snprintf(top_buf, sizeof(top_buf), "Goal: %d%%\n%d Steps", goal_pct, steps);
-    if (!g_sleep_data_available) {
-        snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\\nCheck Pebble Health sync");
-    }
     graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
                        GRect(0, 40, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
@@ -234,7 +231,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     snprintf(top_buf, sizeof(top_buf), "Sleep: %d | Ready: %d\n%s - %s\nMorn HR: %d BPM", 
              g_sleep_comp, g_readiness_comp, sleep_start_str, sleep_end_str, g_morning_hr_comp);
     // Draw the formatted top readout block
-    if (!g_sleep_data_available) snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\\nCheck Pebble Health sync");\n    graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
+    if (!g_sleep_data_available) {\n        snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\\nCheck Pebble Health sync");\n    }\n    graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
                        GRect(0, 38, 200, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Calculate total net sleep in seconds

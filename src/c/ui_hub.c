@@ -163,10 +163,15 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
         int days = 0;
         int baseline = ui_stress_hrv_baseline(&days);
         int latest = ui_stress_latest_hrv();
-        snprintf(details, sizeof(details),
-                 "Sleep %d/100   Rest HR %d\nHRV %s%d ms\nCalibration %d/7 days",
-                 g_sleep_comp, g_morning_hr_comp,
-                 latest ? "" : "-- ", latest ? latest : 0, days);
+        if (latest > 0) {
+            snprintf(details, sizeof(details),
+                     "Sleep %d/100   Rest HR %d\nHRV %d ms\nCalibration %d/7 days",
+                     g_sleep_comp, g_morning_hr_comp, latest, days);
+        } else {
+            snprintf(details, sizeof(details),
+                     "Sleep %d/100   Rest HR %d\nHRV not measured\nCalibration %d/7 days",
+                     g_sleep_comp, g_morning_hr_comp, days);
+        }
         (void)baseline;
     } else {
         int kcal = (int)health_service_sum_today(HealthMetricActiveKCalories);

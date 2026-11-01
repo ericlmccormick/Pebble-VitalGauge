@@ -26,6 +26,7 @@
 // ============================================================================
 extern int g_live_energy_score;
 extern int g_sleep_comp;
+extern bool g_sleep_data_available;
 extern int g_readiness_comp;
 extern int g_card_eff_comp;
 extern int g_exertion_comp;
@@ -82,6 +83,7 @@ void ui_stats_init(void);
 void ui_stats_deinit(void);
 void ui_activity_push(void);
 void ui_sleep_push(void);
+void ui_sleep_mark_dirty(void);
 void ui_history_push(void);
 void ui_battery_push(void);
 void ui_battery_mark_dirty(void);
@@ -90,6 +92,8 @@ void ui_stress_init(void);
 void ui_stress_deinit(void);
 void ui_stress_push(void);
 void ui_stress_mark_dirty(void);
+void ui_stress_hrv_update(void);
+void ui_stress_start_automatic(void);
 
 void ui_settings_init(void);
 void ui_settings_deinit(void);

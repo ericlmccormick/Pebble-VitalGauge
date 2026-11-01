@@ -157,10 +157,10 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Calculate total duration of the sleep block in minutes
     int total_sleep_mins = (g_sleep_end - g_sleep_start) / 60;
     // Calculate the physical pixel endpoint based on the sleep score percentage
-    int max_p = (g_sleep_comp * 856) / 100;
+    int max_p = 856; // Full clock span; never truncate the timeline by sleep score
 
     // Render sleep stages if valid data exists
-    if (total_sleep_mins > 0 && max_p > 0) {
+    if (total_sleep_mins > 0 && g_sleep_data_available) {
         // Initialize variable tracking the start of a contiguous color group
         int group_start_p = -1;
         // Initialize variable tracking the current color being rendered
@@ -180,7 +180,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
                 // Retrieve the sleep state for this minute
                 uint8_t state = g_sleep_map[minute_of_day];
                 // Assign DukeBlue for deep, PictonBlue for light, Red for awake
-                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : GColorRed);
+                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : ((state == 3) ? GColorPictonBlue : GColorRed));
                 // Map the minute sequence mathematically to the physical perimeter
                 int p = (m * max_p) / total_sleep_mins;
 
@@ -231,6 +231,9 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     snprintf(top_buf, sizeof(top_buf), "Sleep: %d | Ready: %d\n%s - %s\nMorn HR: %d BPM", 
              g_sleep_comp, g_readiness_comp, sleep_start_str, sleep_end_str, g_morning_hr_comp);
     // Draw the formatted top readout block
+    if (!g_sleep_data_available) {
+        snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\nCheck Pebble Health sync");
+    }
     graphics_draw_text(ctx, top_buf, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), 
                        GRect(0, 38, 200, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
@@ -259,7 +262,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Initialize string buffer for deep sleep duration
     char buf_deep[32];
     // Format the deep sleep duration into hours and minutes
-    snprintf(buf_deep, sizeof(buf_deep), "Deep: %dh %dm", g_sleep_deep_sec / 3600, (g_sleep_deep_sec % 3600) / 60);
+    snprintf(buf_deep, sizeof(buf_deep), "Restful: %dh %dm", g_sleep_deep_sec / 3600, (g_sleep_deep_sec % 3600) / 60);
     // Draw the formatted deep sleep string
     graphics_draw_text(ctx, buf_deep, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
     // Increment the vertical position for the next row
@@ -444,6 +447,10 @@ void ui_stats_deinit() {
 
 void ui_activity_push() { window_stack_push(s_activity_window, true); }
 void ui_sleep_push() { window_stack_push(s_sleep_window, true); }
+void ui_sleep_mark_dirty(void) {
+    if (s_sleep_canvas && window_is_loaded(s_sleep_window))
+        layer_mark_dirty(s_sleep_canvas);
+}
 void ui_history_push() { window_stack_push(s_history_window, true); }
 void ui_battery_push() { window_stack_push(s_battery_window, true); }
 

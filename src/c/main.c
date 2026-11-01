@@ -3,9 +3,31 @@
 // ============================================================================
 // --- SECTION 1: EVENT WRAPPERS & TICK HANDLERS ---
 // ============================================================================
+static AppTimer *s_health_refresh_timer;
+static bool s_health_subscribed;
+
+static void health_refresh_cb(void *data) {
+    s_health_refresh_timer = NULL;
+    health_engine_update_buffers();
+    ui_hub_mark_dirty();
+    ui_sleep_mark_dirty();
+}
+
+static void health_event_cb(HealthEventType event, void *context) {
+    if (event == HealthEventHRVUpdate) {
+        ui_stress_hrv_update();
+        return;
+    }
+    if (event != HealthEventSleepUpdate &&
+        event != HealthEventSignificantUpdate) return;
+    if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
+    s_health_refresh_timer = app_timer_register(750, health_refresh_cb, NULL);
+}
+
 static void initial_sync_timer_cb(void *data) {
     health_engine_update_buffers();
     ui_hub_mark_dirty();
+    ui_sleep_mark_dirty();
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
@@ -50,14 +72,14 @@ static void init(void) {
     ui_settings_init();
   
     tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+    s_health_subscribed = health_service_events_subscribe(health_event_cb, NULL);
+    if (!s_health_subscribed) APP_LOG(APP_LOG_LEVEL_WARNING, "Health event subscription failed");
 
     // Launch the background worker to enable silent background monitoring
     app_worker_launch();
 
     if (launch_reason() == APP_LAUNCH_WORKER) {
-        ui_hub_push(false);
-        health_engine_log_metrics();
-        window_stack_pop_all(false);
+        ui_stress_start_automatic();
     } else {
         ui_hub_push(true);
         app_timer_register(500, initial_sync_timer_cb, NULL);
@@ -65,6 +87,8 @@ static void init(void) {
 }
 
 static void deinit(void) {
+    if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);
+    if (s_health_subscribed) health_service_events_unsubscribe();
     tick_timer_service_unsubscribe();
     app_glance_reload(app_glance_callback, NULL);
     ui_stress_deinit();

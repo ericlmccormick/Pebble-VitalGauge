@@ -110,6 +110,10 @@ static void update_history_arrays() {
 // Native activity intervals are the source of truth for sleep. The minute
 // history API may have gaps, so it must not determine whether sleep occurred.
 static uint8_t s_native_sleep_mask[1440];
+// Avoid putting several kilobytes of sensor buffers on the Pebble app stack.
+static uint8_t s_valid_motion[1440];
+static uint8_t s_quiet_motion[1440];
+static uint8_t s_minute_hr[1440];
 static bool s_found_sleep;
 
 static bool find_latest_sleep_cb(HealthActivity activity, time_t start,
@@ -173,10 +177,9 @@ void health_engine_update_buffers() {
     // First collect motion/HR evidence; native intervals alone are insufficient
     // when the firmware stops recognizing sleep after a brief awakening.
     // Each minute keeps its own validity flag; missing records are not rest.
-    uint8_t valid_motion[1440] = {0};
-    uint8_t quiet_motion[1440] = {0};
-    uint8_t minute_hr[1440] = {0};
-    uint8_t minute_steps[1440] = {0};
+    memset(s_valid_motion, 0, sizeof(s_valid_motion));
+    memset(s_quiet_motion, 0, sizeof(s_quiet_motion));
+    memset(s_minute_hr, 0, sizeof(s_minute_hr));
     time_t rhr_window_end = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600);
     int m_hr = 999;
     HealthMinuteData chunk[CHUNK_SIZE];
@@ -190,12 +193,11 @@ void health_engine_update_buffers() {
             ++valid_minute_records;
             int slot = (int)((chunk_start + (time_t)i * 60 - g_24h_start) / 60);
             if (slot >= 0 && slot < 1440) {
-                valid_motion[slot] = 1;
-                minute_steps[slot] = chunk[i].steps > 255 ? 255 : chunk[i].steps;
-                minute_hr[slot] = chunk[i].heart_rate_bpm > 255 ? 255 : chunk[i].heart_rate_bpm;
+                s_valid_motion[slot] = 1;
+                s_minute_hr[slot] = chunk[i].heart_rate_bpm > 255 ? 255 : chunk[i].heart_rate_bpm;
                 // Original application used 15 steps and 350 VMC to exclude
                 // movement-heavy periods. Reuse those limits as a veto.
-                quiet_motion[slot] = chunk[i].steps <= 15 && chunk[i].vmc <= 350;
+                s_quiet_motion[slot] = chunk[i].steps <= 15 && chunk[i].vmc <= 350;
                 ++motion_records;
             }
             int min_of_day = (chunk_start + (i * 60) - g_24h_start) / 60, b = min_of_day / 10;
@@ -219,8 +221,8 @@ void health_engine_update_buffers() {
         // Reject movement-heavy minutes incorrectly classified as native sleep,
         // but don't reject the entire native session for a momentary movement.
         for (int i = first_native; i <= last_native; ++i) {
-            if (s_native_sleep_mask[i] && valid_motion[i] &&
-                !quiet_motion[i]) {
+            if (s_native_sleep_mask[i] && s_valid_motion[i] &&
+                !s_quiet_motion[i]) {
                 s_native_sleep_mask[i] = 0;
                 ++rejected_minutes;
             }
@@ -238,11 +240,11 @@ void health_engine_update_buffers() {
             if (i + 25 > 1440 || i + 25 > cutoff + 1) break;
             int good = 0, observed = 0, active = 0, hr_count = 0, hr_sum = 0;
             for (int j = i; j < i + 25; ++j) {
-                if (!valid_motion[j]) continue;
+                if (!s_valid_motion[j]) continue;
                 ++observed;
-                if (quiet_motion[j]) ++good;
+                if (s_quiet_motion[j]) ++good;
                 else ++active;
-                if (minute_hr[j] > 0) { hr_sum += minute_hr[j]; ++hr_count; }
+                if (s_minute_hr[j] > 0) { hr_sum += s_minute_hr[j]; ++hr_count; }
             }
             // The watch cannot reliably infer sleep from no HR or no movement
             // records; require HR coverage as supporting evidence.
@@ -257,7 +259,7 @@ void health_engine_update_buffers() {
             if (i - prev > 90) break;
             // Mark the sustained quiet period, not the preceding wake gap.
             for (int j = i; j < i + 25; ++j) {
-                if (valid_motion[j] && quiet_motion[j] &&
+                if (s_valid_motion[j] && s_quiet_motion[j] &&
                     !s_native_sleep_mask[j]) {
                     g_sleep_map[j] = 3; // estimated sleep, not confirmed restful
                     ++inferred_minutes;

@@ -217,11 +217,6 @@ void health_engine_update_buffers() {
             if (b >= 0 && b < 144) { g_act_map[b] += s_history_chunk[i].steps; if (s_history_chunk[i].heart_rate_bpm > g_stress_map[b]) g_stress_map[b] = s_history_chunk[i].heart_rate_bpm; }
             if (chunk_start + ((time_t)i * 60) >= rhr_window_end - (90 * 60) && chunk_start + ((time_t)i * 60) <= rhr_window_end) if (s_history_chunk[i].heart_rate_bpm > 0 && s_history_chunk[i].vmc == 0 && s_history_chunk[i].heart_rate_bpm < m_hr) m_hr = s_history_chunk[i].heart_rate_bpm;
         }
-        APP_LOG(APP_LOG_LEVEL_INFO,
-                "MINUTE_CHUNK %d req=%ld..%ld actual=%ld..%ld returned=%lu valid=%d",
-                c, (long)requested_start, (long)requested_end,
-                (long)chunk_start, (long)chunk_end,
-                (unsigned long)fetched, chunk_valid);
     }
     // Independent short-range probes: distinguish an entirely empty minute
     // history API from missing older overnight records. A zero return makes

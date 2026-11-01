@@ -1,6 +1,7 @@
 #include "vitalgauge.h"
 
-#define CHUNK_SIZE 240
+#define CHUNK_SIZE 60
+#define HISTORY_CHUNKS (1440 / CHUNK_SIZE)
 
 // ============================================================================
 // --- SECTION 1: GLOBAL STATE INSTANTIATION ---
@@ -155,7 +156,7 @@ static bool fill_sleep_mask_cb(HealthActivity activity, time_t start,
 }
 
 void health_engine_update_buffers() { 
-    time_t now = time(NULL); g_24h_start = now - (24 * 3600);
+    time_t now = time(NULL); g_24h_start = (now / 60) * 60 - (24 * 3600);
     g_sleep_start = 0; g_sleep_end = 0; g_sleep_deep_sec = 0; g_sleep_light_sec = 0; g_longest_sleep_duration = 0;
     memset(g_act_map, 0, sizeof(g_act_map)); memset(g_stress_map, 0, sizeof(g_stress_map));
     memset(g_sleep_map, 0, sizeof(g_sleep_map)); memset(s_native_restful_mask, 0, sizeof(s_native_restful_mask));
@@ -190,13 +191,14 @@ void health_engine_update_buffers() {
 
     int valid_minute_records = 0;
     int motion_records = 0;
-    for (int c = 0; c < 6; c++) {
+    for (int c = 0; c < HISTORY_CHUNKS; c++) {
         time_t chunk_start = g_24h_start + (c * CHUNK_SIZE * 60), chunk_end = chunk_start + (CHUNK_SIZE * 60);
         time_t requested_start = chunk_start;
         time_t requested_end = chunk_end;
         uint32_t fetched = health_service_get_minute_history(s_history_chunk, CHUNK_SIZE,
                                                                &chunk_start, &chunk_end);
         int chunk_valid = 0;
+        if (fetched > CHUNK_SIZE) fetched = CHUNK_SIZE;
         for (uint32_t i = 0; i < fetched; i++) {
             if (s_history_chunk[i].is_invalid) continue;
             ++valid_minute_records;

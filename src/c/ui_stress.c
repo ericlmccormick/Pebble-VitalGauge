@@ -60,6 +60,11 @@ static const struct EKGPoint ekg_pts[] = {
 
 };
 
+#define HRV_SAMPLES 60
+static uint16_t s_hrv_intervals[HRV_SAMPLES];
+static uint8_t s_hrv_count;
+static int s_hrv_rmssd;
+static bool s_hrv_active;
 // HRV history: compact fixed-size circular log (~192 bytes).
 // Baseline uses only good manual scans, not elevated-HR auto-trigger scans.
 #define HRV_HISTORY_KEY 410
@@ -133,11 +138,7 @@ static void hrv_save_completed(int bpm) {
     }
 }
 
-#define HRV_SAMPLES 60
-static uint16_t s_hrv_intervals[HRV_SAMPLES];
-static uint8_t s_hrv_count;
-static int s_hrv_rmssd;
-static bool s_hrv_active;
+
 
 static uint32_t hrv_sqrt(uint32_t n) {
     uint32_t r = 0, bit = (uint32_t)1 << 30;

@@ -157,10 +157,10 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Calculate total duration of the sleep block in minutes
     int total_sleep_mins = (g_sleep_end - g_sleep_start) / 60;
     // Calculate the physical pixel endpoint based on the sleep score percentage
-    int max_p = (g_sleep_comp * 856) / 100;
+    int max_p = 856; // Full clock span; never truncate the timeline by sleep score
 
     // Render sleep stages if valid data exists
-    if (total_sleep_mins > 0 && max_p > 0) {
+    if (total_sleep_mins > 0 && g_sleep_data_available) {
         // Initialize variable tracking the start of a contiguous color group
         int group_start_p = -1;
         // Initialize variable tracking the current color being rendered

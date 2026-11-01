@@ -171,9 +171,15 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
     } else if (s_recovery_page == 2) {
         int days = 0;
         int baseline = ui_stress_hrv_baseline(&days);
-        snprintf(info, sizeof(info), "HRV %s\nBaseline %s\nRest HR %d bpm\n%d/7 valid days",
+        time_t measured = ui_stress_latest_hrv_time();
+        long age_hours = measured > 0 && time(NULL) >= measured ?
+                         (long)((time(NULL) - measured) / 3600) : -1;
+        snprintf(info, sizeof(info), "HRV %s\nBaseline %s\nRest HR %d bpm\n%s",
                  primary ? "recorded" : "unavailable",
-                 baseline ? "ready" : "calibrating", g_morning_hr_comp, days);
+                 baseline ? "ready" : "calibrating", g_morning_hr_comp,
+                 age_hours < 0 ? "No timestamp" :
+                 age_hours < 1 ? "Measured within 1h" :
+                 age_hours < 24 ? "Measured today" : "Measurement is older");
     } else {
         int total = g_sleep_deep_sec + g_sleep_light_sec;
         snprintf(info, sizeof(info), "Total %dh %02dm\nDeep %dh %02dm\nLight %dh %02dm\n%s",

@@ -7,7 +7,8 @@ static Window *s_hub_window;
 static Layer *s_hub_drawing_layer;
 static Window *s_recovery_window;
 static Layer *s_recovery_layer;
-static bool s_show_morning;
+static uint8_t s_recovery_page;
+static uint8_t s_last_recovery_page;
 
 static void recovery_open(void);
 
@@ -135,55 +136,72 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
 static void recovery_draw(Layer *layer, GContext *ctx) {
     graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
-    GColor fg = vg_foreground();
-    graphics_context_set_text_color(ctx, fg);
-    const char *heading = s_show_morning ? "MORNING RECOVERY" : "ENERGY RESERVE";
-    graphics_draw_text(ctx, heading, fonts_get_system_font(VG_FONT_BODY),
-                       GRect(8, 10, 184, 30), GTextOverflowModeFill,
+    graphics_context_set_text_color(ctx, vg_foreground());
+    const char *titles[] = {"ENERGY RESERVE", "MORNING RECOVERY", "RECOVERY DETAILS", "SLEEP DETAILS"};
+    graphics_draw_text(ctx, titles[s_recovery_page], fonts_get_system_font(VG_FONT_TITLE),
+                       GRect(4, 8, 192, 32), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
-    int value = s_show_morning ? g_readiness_comp : g_live_energy_score;
-    char number[16];
-    snprintf(number, sizeof(number), "%d", value);
+    int primary = s_recovery_page == 0 ? g_live_energy_score :
+                  s_recovery_page == 1 ? g_readiness_comp :
+                  s_recovery_page == 2 ? ui_stress_latest_hrv() :
+                  g_sleep_comp;
+    char number[20];
+    if (s_recovery_page == 2 && primary == 0) snprintf(number, sizeof(number), "--");
+    else snprintf(number, sizeof(number), "%d", primary);
     graphics_draw_text(ctx, number, fonts_get_system_font(VG_FONT_NUMBER),
-                       GRect(36, 44, 128, 48), GTextOverflowModeFill,
+                       GRect(28, 43, 144, 49), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
-    char details[160];
-    if (s_show_morning) {
+    char info[180];
+    if (s_recovery_page == 0) {
+        int kcal = (int)health_service_sum_today(HealthMetricActiveKCalories);
+        snprintf(info, sizeof(info), "Sleep %d   Ready %d\nActive %d kcal\nStress component %d\nActivity drain %d",
+                 g_sleep_comp, g_readiness_comp, kcal, g_stress_comp, g_exertion_comp);
+    } else if (s_recovery_page == 1) {
         int days = 0;
         int baseline = ui_stress_hrv_baseline(&days);
         int latest = ui_stress_latest_hrv();
-        if (latest > 0) {
-            snprintf(details, sizeof(details),
-                     "Sleep %d/100   Rest HR %d\nHRV %d ms\nCalibration %d/7 days",
-                     g_sleep_comp, g_morning_hr_comp, latest, days);
-        } else {
-            snprintf(details, sizeof(details),
-                     "Sleep %d/100   Rest HR %d\nHRV not measured\nCalibration %d/7 days",
-                     g_sleep_comp, g_morning_hr_comp, days);
-        }
-        (void)baseline;
+        if (latest && baseline)
+            snprintf(info, sizeof(info), "HRV %d ms   Base %d ms\nDifference %+d%%\nRest HR %d bpm\n%d/7 calibration days",
+                     latest, baseline, (latest - baseline) * 100 / baseline,
+                     g_morning_hr_comp, days);
+        else
+            snprintf(info, sizeof(info), "HRV %s\nRest HR %d bpm\nSleep score %d/100\n%d/7 calibration days",
+                     latest ? "Calibrating" : "Unavailable",
+                     g_morning_hr_comp, g_sleep_comp, days);
+    } else if (s_recovery_page == 2) {
+        int days = 0;
+        int baseline = ui_stress_hrv_baseline(&days);
+        snprintf(info, sizeof(info), "HRV %s\nBaseline %s\nRest HR %d bpm\n%d/7 valid days",
+                 primary ? "recorded" : "unavailable",
+                 baseline ? "ready" : "calibrating", g_morning_hr_comp, days);
     } else {
-        int kcal = (int)health_service_sum_today(HealthMetricActiveKCalories);
-        snprintf(details, sizeof(details),
-                 "Sleep %d  Ready %d\nActive %d kcal\nReserve updates during day",
-                 g_sleep_comp, g_readiness_comp, kcal);
+        int total = g_sleep_deep_sec + g_sleep_light_sec;
+        snprintf(info, sizeof(info), "Total %dh %02dm\nDeep %dh %02dm\nLight %dh %02dm\n%s",
+                 total / 3600, (total / 60) % 60,
+                 g_sleep_deep_sec / 3600, (g_sleep_deep_sec / 60) % 60,
+                 g_sleep_light_sec / 3600, (g_sleep_light_sec / 60) % 60,
+                 g_sleep_data_available ? "Last detected sleep" : "Sleep data unavailable");
     }
-    graphics_draw_text(ctx, details, fonts_get_system_font(VG_FONT_BODY),
-                       GRect(12, 105, 176, 90), GTextOverflowModeWordWrap,
+    graphics_draw_text(ctx, info, fonts_get_system_font(VG_FONT_BODY),
+                       GRect(8, 105, 184, 102), GTextOverflowModeWordWrap,
                        GTextAlignmentCenter, NULL);
-    graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, "UP/DOWN  Change view", fonts_get_system_font(VG_FONT_HINT),
-                       GRect(10, 202, 180, 20), GTextOverflowModeFill,
+    graphics_draw_text(ctx, "UP/DOWN  Browse", fonts_get_system_font(VG_FONT_HINT),
+                       GRect(10, 207, 180, 19), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
 }
-static void recovery_switch(ClickRecognizerRef recognizer, void *context) {
-    s_show_morning = !s_show_morning;
-    if (s_recovery_layer) layer_mark_dirty(s_recovery_layer);
+static void recovery_up(ClickRecognizerRef recognizer, void *context) {
+    s_recovery_page = (s_recovery_page + 3) % 4;
+    s_last_recovery_page = s_recovery_page;
+    layer_mark_dirty(s_recovery_layer);
+}
+static void recovery_down(ClickRecognizerRef recognizer, void *context) {
+    s_recovery_page = (s_recovery_page + 1) % 4;
+    s_last_recovery_page = s_recovery_page;
+    layer_mark_dirty(s_recovery_layer);
 }
 static void recovery_clicks(void *context) {
-    window_single_click_subscribe(BUTTON_ID_UP, recovery_switch);
-    window_single_click_subscribe(BUTTON_ID_DOWN, recovery_switch);
-    window_single_click_subscribe(BUTTON_ID_SELECT, recovery_switch);
+    window_single_click_subscribe(BUTTON_ID_UP, recovery_up);
+    window_single_click_subscribe(BUTTON_ID_DOWN, recovery_down);
 }
 static void recovery_load(Window *window) {
     s_recovery_layer = layer_create(layer_get_bounds(window_get_root_layer(window)));
@@ -197,8 +215,8 @@ static void recovery_unload(Window *window) {
 }
 static void recovery_open(void) {
     time_t now = time(NULL);
-    s_show_morning = g_sleep_end > 0 && now >= g_sleep_end &&
-                     now - g_sleep_end < 2 * 3600;
+    s_recovery_page = s_last_recovery_page;
+    (void)now;
     window_stack_push(s_recovery_window, true);
 }
 
@@ -239,4 +257,7 @@ void ui_hub_mark_dirty() {
     if (s_hub_drawing_layer && window_is_loaded(s_hub_window)) {
         layer_mark_dirty(s_hub_drawing_layer);
     }
+}
+bool ui_hub_is_visible(void) {
+    return window_stack_get_top_window() == s_hub_window;
 }

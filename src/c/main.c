@@ -6,6 +6,8 @@
 static AppTimer *s_health_refresh_timer;
 static bool s_health_subscribed;
 #define MORNING_SCAN_DAY_KEY 412
+#define HRV_WORKER_LAUNCH_CONTEXT_KEY 414
+#define HRV_REST_PENDING_KEY 416
 static void morning_scan_maybe_start(void) {
     time_t now = time(NULL);
     if (!g_sleep_data_available || !g_sleep_end || now < g_sleep_end ||
@@ -103,7 +105,16 @@ static void init(void) {
     app_worker_launch();
 
     if (launch_reason() == APP_LAUNCH_WORKER) {
-        ui_stress_start_automatic();
+        int context = persist_exists(HRV_WORKER_LAUNCH_CONTEXT_KEY) ?
+            persist_read_int(HRV_WORKER_LAUNCH_CONTEXT_KEY) : 1;
+        persist_delete(HRV_WORKER_LAUNCH_CONTEXT_KEY);
+        if (context == 2 && persist_exists(HRV_REST_PENDING_KEY)) {
+            time_t requested = persist_read_int(HRV_REST_PENDING_KEY);
+            persist_delete(HRV_REST_PENDING_KEY);
+            if (requested > 0 && time(NULL) - requested <= 120)
+                ui_stress_start_morning();
+            else ui_hub_push(false);
+        } else ui_stress_start_automatic();
     } else {
         ui_hub_push(true);
         app_timer_register(500, initial_sync_timer_cb, NULL);

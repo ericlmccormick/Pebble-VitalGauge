@@ -797,7 +797,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         graphics_draw_text(ctx, buf_norm, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
         // Render instructional menu at the bottom of the display
-        graphics_context_set_text_color(ctx, GColorDarkGray);
+        graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
         graphics_draw_text(ctx, "SELECT Scan    UP/DOWN Breathe", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
                            GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
     } 

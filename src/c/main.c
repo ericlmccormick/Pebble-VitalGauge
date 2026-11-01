@@ -14,6 +14,10 @@ static void health_refresh_cb(void *data) {
 }
 
 static void health_event_cb(HealthEventType event, void *context) {
+    if (event == HealthEventHRVUpdate) {
+        ui_stress_hrv_update();
+        return;
+    }
     if (event != HealthEventSleepUpdate &&
         event != HealthEventSignificantUpdate) return;
     if (s_health_refresh_timer) app_timer_cancel(s_health_refresh_timer);

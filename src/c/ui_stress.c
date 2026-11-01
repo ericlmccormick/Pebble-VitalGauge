@@ -60,6 +60,63 @@ static const struct EKGPoint ekg_pts[] = {
 
 };
 
+#define HRV_SAMPLES 60
+static uint16_t s_hrv_intervals[HRV_SAMPLES];
+static uint8_t s_hrv_count;
+static int s_hrv_rmssd;
+static bool s_hrv_active;
+
+static uint32_t hrv_sqrt(uint32_t n) {
+    uint32_t r = 0, bit = (uint32_t)1 << 30;
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
+static void hrv_begin(void) {
+    memset(s_hrv_intervals, 0, sizeof(s_hrv_intervals));
+    s_hrv_count = 0;
+    s_hrv_rmssd = 0;
+    s_hrv_active = health_service_set_hrv_sample_period(1);
+}
+
+static void hrv_end(void) {
+    if (s_hrv_active) health_service_set_hrv_sample_period(0);
+    s_hrv_active = false;
+}
+
+void ui_stress_hrv_update(void) {
+    if (!s_hrv_active || !s_is_scanning) return;
+    uint16_t ppi = health_service_peek_hrv_ppi_ms();
+    if (ppi < 400 || ppi > 1500) return;
+    if (s_hrv_count) {
+        uint16_t previous = s_hrv_intervals[s_hrv_count - 1];
+        if ((int)ppi - (int)previous > 250 ||
+            (int)previous - (int)ppi > 250) return;
+    }
+    if (s_hrv_count < HRV_SAMPLES) {
+        s_hrv_intervals[s_hrv_count++] = ppi;
+    } else {
+        memmove(s_hrv_intervals, s_hrv_intervals + 1,
+                (HRV_SAMPLES - 1) * sizeof(uint16_t));
+        s_hrv_intervals[HRV_SAMPLES - 1] = ppi;
+    }
+    if (s_hrv_count >= 20) {
+        uint32_t sum = 0;
+        for (int i = 1; i < s_hrv_count; ++i) {
+            int d = (int)s_hrv_intervals[i] - s_hrv_intervals[i - 1];
+            sum += (uint32_t)(d * d);
+        }
+        s_hrv_rmssd = (int)hrv_sqrt(sum / (s_hrv_count - 1));
+    }
+    ui_stress_mark_dirty();
+}
+
+
 // ============================================================================
 // --- SECTION 2: MATH HELPERS ---
 // ============================================================================
@@ -601,62 +658,6 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 // ============================================================================
 // --- SECTION 6: CONTROL LOGIC (ui_stress.c) ---
 // ============================================================================
-
-#define HRV_SAMPLES 60
-static uint16_t s_hrv_intervals[HRV_SAMPLES];
-static uint8_t s_hrv_count;
-static int s_hrv_rmssd;
-static bool s_hrv_active;
-
-static uint32_t hrv_sqrt(uint32_t n) {
-    uint32_t r = 0, bit = (uint32_t)1 << 30;
-    while (bit > n) bit >>= 2;
-    while (bit) {
-        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; }
-        else r >>= 1;
-        bit >>= 2;
-    }
-    return r;
-}
-
-static void hrv_begin(void) {
-    memset(s_hrv_intervals, 0, sizeof(s_hrv_intervals));
-    s_hrv_count = 0;
-    s_hrv_rmssd = 0;
-    s_hrv_active = health_service_set_hrv_sample_period(1);
-}
-
-static void hrv_end(void) {
-    if (s_hrv_active) health_service_set_hrv_sample_period(0);
-    s_hrv_active = false;
-}
-
-void ui_stress_hrv_update(void) {
-    if (!s_hrv_active || !s_is_scanning) return;
-    uint16_t ppi = health_service_peek_hrv_ppi_ms();
-    if (ppi < 400 || ppi > 1500) return;
-    if (s_hrv_count) {
-        uint16_t previous = s_hrv_intervals[s_hrv_count - 1];
-        if ((int)ppi - (int)previous > 250 ||
-            (int)previous - (int)ppi > 250) return;
-    }
-    if (s_hrv_count < HRV_SAMPLES) {
-        s_hrv_intervals[s_hrv_count++] = ppi;
-    } else {
-        memmove(s_hrv_intervals, s_hrv_intervals + 1,
-                (HRV_SAMPLES - 1) * sizeof(uint16_t));
-        s_hrv_intervals[HRV_SAMPLES - 1] = ppi;
-    }
-    if (s_hrv_count >= 20) {
-        uint32_t sum = 0;
-        for (int i = 1; i < s_hrv_count; ++i) {
-            int d = (int)s_hrv_intervals[i] - s_hrv_intervals[i - 1];
-            sum += (uint32_t)(d * d);
-        }
-        s_hrv_rmssd = (int)hrv_sqrt(sum / (s_hrv_count - 1));
-    }
-    ui_stress_mark_dirty();
-}
 
 static void start_breathing_session() {
     s_show_breath_summary = false; s_is_breathing = true; 

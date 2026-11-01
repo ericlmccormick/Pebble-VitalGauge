@@ -74,7 +74,7 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
     if(goal_pct > 100) goal_pct = 100;
 
     graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);  
-    graphics_draw_text(ctx, "Activity", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+    graphics_draw_text(ctx, "ACTIVITY", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char top_buf[32];
@@ -222,7 +222,7 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Set text color to black for header
     graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
     // Draw the "Sleep" section title
-    graphics_draw_text(ctx, "Sleep", fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
+    graphics_draw_text(ctx, "SLEEP", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     // Initialize buffer for the top readout block, expanded to 128 to prevent string truncation
@@ -355,7 +355,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
                        GRect(0, 42, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     graphics_context_set_text_color(ctx, GColorDarkGray);
-    graphics_draw_text(ctx, "[Up/Dn]: Cycle  [Sel]: Back", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
+    graphics_draw_text(ctx, "UP/DOWN  Browse     BACK  Return", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), 
                        GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
@@ -377,7 +377,7 @@ static void battery_update_proc(Layer *layer, GContext *ctx) {
     graphics_fill_circle(ctx, get_perimeter_point(p_end, 10), 6);
 
     graphics_context_set_text_color(ctx, g_dark_mode ? GColorWhite : GColorBlack);
-    graphics_draw_text(ctx, "Energy Reserve", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
+    graphics_draw_text(ctx, "ENERGY RESERVE", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), 
                        GRect(0, 5, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char pct_buf[16];
@@ -415,7 +415,6 @@ static void history_select_handler(ClickRecognizerRef recognizer, void *context)
 static void history_click_config_provider(void *context) {
     window_single_click_subscribe(BUTTON_ID_UP, history_up_handler);
     window_single_click_subscribe(BUTTON_ID_DOWN, history_down_handler);
-    window_single_click_subscribe(BUTTON_ID_SELECT, history_select_handler);
     window_single_click_subscribe(BUTTON_ID_BACK, history_select_handler);
 }
 
@@ -432,10 +431,10 @@ static void bat_load(Window *w) { s_battery_canvas = layer_create(layer_get_boun
 static void bat_unload(Window *w) { layer_destroy(s_battery_canvas); }
 
 void ui_stats_init() {
-    s_activity_window = window_create(); window_set_window_handlers(s_activity_window, (WindowHandlers){ .load = act_load, .unload = act_unload }); window_set_background_color(s_activity_window, GColorWhite);
-    s_sleep_window = window_create(); window_set_window_handlers(s_sleep_window, (WindowHandlers){ .load = slp_load, .unload = slp_unload }); window_set_background_color(s_sleep_window, GColorWhite);
-    s_history_window = window_create(); window_set_window_handlers(s_history_window, (WindowHandlers){ .load = his_load, .unload = his_unload }); window_set_background_color(s_history_window, GColorWhite);
-    s_battery_window = window_create(); window_set_window_handlers(s_battery_window, (WindowHandlers){ .load = bat_load, .unload = bat_unload }); window_set_background_color(s_battery_window, GColorWhite);
+    s_activity_window = window_create(); window_set_window_handlers(s_activity_window, (WindowHandlers){ .load = act_load, .unload = act_unload }); window_set_background_color(s_activity_window, g_dark_mode ? GColorBlack : GColorWhite);
+    s_sleep_window = window_create(); window_set_window_handlers(s_sleep_window, (WindowHandlers){ .load = slp_load, .unload = slp_unload }); window_set_background_color(s_sleep_window, g_dark_mode ? GColorBlack : GColorWhite);
+    s_history_window = window_create(); window_set_window_handlers(s_history_window, (WindowHandlers){ .load = his_load, .unload = his_unload }); window_set_background_color(s_history_window, g_dark_mode ? GColorBlack : GColorWhite);
+    s_battery_window = window_create(); window_set_window_handlers(s_battery_window, (WindowHandlers){ .load = bat_load, .unload = bat_unload }); window_set_background_color(s_battery_window, g_dark_mode ? GColorBlack : GColorWhite);
 }
 
 void ui_stats_deinit() {

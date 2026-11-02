@@ -1,63 +1,46 @@
 #include "vitalgauge.h"
-#include "message_keys.auto.h" // Generated from package.json pebble.messageKeys
+#include "message_keys.auto.h"
 
-// ============================================================================
-// --- SECTION 1: APPSYNC KEYS AND STATE ---
-// ============================================================================
-static AppSync s_sync;
-static uint8_t s_sync_buffer[256];
-static bool s_initializing_sync;
+// Phone-to-watch settings must carry an explicit save marker.
+// A stale AppSync/Clay replay without the marker cannot modify watch preferences.
+#define VG_SAVE_MARKER 0x5647
 
-enum AppSyncKeys {
-    SYNC_VOLUME_KEY = 0,
-    SYNC_TARGET_HR_KEY = 1
-};
+static void inbox_received(DictionaryIterator *iter, void *context) {
+    Tuple *save = dict_find(iter, MESSAGE_KEY_VG_SETTINGS_SAVE);
+    if (!save || (int32_t)save->value->int32 != VG_SAVE_MARKER) {
+        APP_LOG(APP_LOG_LEVEL_DEBUG, "Ignoring unsolicited settings message");
+        return;
+    }
 
-// ============================================================================
-// --- SECTION 2: SYNC CALLBACKS ---
-// ============================================================================
-static void sync_tuple_changed_callback(const uint32_t key, const Tuple* new_tuple, const Tuple* old_tuple, void* context) {
-    if (key == SYNC_VOLUME_KEY) {
-            g_volume_level = new_tuple->value->int32;
-            persist_write_int(PERSIST_KEY_VOLUME, g_volume_level);
-            ui_stress_mark_dirty();
-    } else if (key == SYNC_TARGET_HR_KEY) {
-            g_target_hr = new_tuple->value->int32;
-    } else if (key == MESSAGE_KEY_VG_DARK_MODE) {
-            if (s_initializing_sync) return;
-            g_dark_mode = new_tuple->value->int32 != 0;
-            int write_result = persist_write_int(PERSIST_KEY_DARK_MODE, g_dark_mode ? 1 : 0);
-            APP_LOG(APP_LOG_LEVEL_INFO, "Dark mode phone update: %d, persist result: %d", g_dark_mode, write_result);
-            ui_hub_mark_dirty();
-            ui_stress_mark_dirty();
-            ui_sleep_mark_dirty();
-    } else if (key == MESSAGE_KEY_VG_BREATH_STYLE) {
-            if (s_initializing_sync) return;
-            if (new_tuple->value->int32 >= 0 && new_tuple->value->int32 <= 2) {
-                g_breath_style = new_tuple->value->int32;
-                persist_write_int(PERSIST_KEY_BREATH_STYLE, g_breath_style);
-            }
-    } else if (key == MESSAGE_KEY_VG_HAPTIC_LEVEL) {
-            if (s_initializing_sync) return;
-            if (new_tuple->value->int32 >= 0 && new_tuple->value->int32 <= 2) {
-                g_haptic_level = new_tuple->value->int32;
-                persist_write_int(PERSIST_KEY_HAPTIC_LEVEL, g_haptic_level);
-            }
-    } else if (key == MESSAGE_KEY_VG_BACKLIGHT) {
-            if (s_initializing_sync) return;
-            g_backlight_stay_on = new_tuple->value->int32 != 0;
-            persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
+    Tuple *dark = dict_find(iter, MESSAGE_KEY_VG_DARK_MODE);
+    Tuple *breath = dict_find(iter, MESSAGE_KEY_VG_BREATH_STYLE);
+    Tuple *haptic = dict_find(iter, MESSAGE_KEY_VG_HAPTIC_LEVEL);
+    Tuple *backlight = dict_find(iter, MESSAGE_KEY_VG_BACKLIGHT);
+
+    if (dark && dark->value->int32 <= 1) {
+        g_dark_mode = dark->value->int32 != 0;
+        int result = persist_write_int(PERSIST_KEY_DARK_MODE, g_dark_mode ? 1 : 0);
+        APP_LOG(APP_LOG_LEVEL_INFO, "Explicit phone dark mode save=%d persisted=%d",
+                g_dark_mode, result);
+        ui_hub_mark_dirty();
+        ui_stress_mark_dirty();
+        ui_sleep_mark_dirty();
+    }
+    if (breath && breath->value->int32 <= 2) {
+        g_breath_style = breath->value->int32;
+        persist_write_int(PERSIST_KEY_BREATH_STYLE, g_breath_style);
+    }
+    if (haptic && haptic->value->int32 <= 2) {
+        g_haptic_level = haptic->value->int32;
+        persist_write_int(PERSIST_KEY_HAPTIC_LEVEL, g_haptic_level);
+    }
+    if (backlight && backlight->value->int32 <= 1) {
+        g_backlight_stay_on = backlight->value->int32 != 0;
+        persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
     }
 }
 
-static void sync_error_callback(DictionaryResult dict_error, AppMessageResult app_message_error, void *context) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "AppSync Error: %d", app_message_error);
-}
-
-// ============================================================================
-// --- SECTION 3: SYNC INIT/DEINIT ---
-// ============================================================================
-void config_sync_init() {
+void config_sync_init(void) {
     if (persist_exists(PERSIST_KEY_VOLUME)) { 
         g_volume_level = persist_read_int(PERSIST_KEY_VOLUME);
     }
@@ -71,22 +54,13 @@ void config_sync_init() {
     g_breath_style = persist_exists(PERSIST_KEY_BREATH_STYLE) ? persist_read_int(PERSIST_KEY_BREATH_STYLE) : 0;
     g_haptic_level = persist_exists(PERSIST_KEY_HAPTIC_LEVEL) ? persist_read_int(PERSIST_KEY_HAPTIC_LEVEL) : 2;
     g_backlight_stay_on = persist_exists(PERSIST_KEY_BACKLIGHT) ? persist_read_bool(PERSIST_KEY_BACKLIGHT) : false;
-    Tuplet initial_values[] = {
-        TupletInteger(SYNC_VOLUME_KEY, g_volume_level),
-        TupletInteger(SYNC_TARGET_HR_KEY, 60),
-        TupletInteger(MESSAGE_KEY_VG_DARK_MODE, g_dark_mode),
-        TupletInteger(MESSAGE_KEY_VG_BREATH_STYLE, g_breath_style),
-        TupletInteger(MESSAGE_KEY_VG_HAPTIC_LEVEL, g_haptic_level),
-        TupletInteger(MESSAGE_KEY_VG_BACKLIGHT, g_backlight_stay_on)
-    };
-    s_initializing_sync = true;
-    app_sync_init(&s_sync, s_sync_buffer, sizeof(s_sync_buffer), initial_values, ARRAY_LENGTH(initial_values), sync_tuple_changed_callback, sync_error_callback, NULL);
-    s_initializing_sync = false;
+    app_message_register_inbox_received(inbox_received);
 }
 
-void config_sync_deinit() {
-    app_sync_deinit(&s_sync);
+void config_sync_deinit(void) {
+    app_message_deregister_callbacks();
 }
+
 void config_sync_send_settings(void) {
     DictionaryIterator *iter;
     if (app_message_outbox_begin(&iter) != APP_MSG_OK || !iter) return;

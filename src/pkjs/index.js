@@ -61,6 +61,8 @@ Pebble.addEventListener('webviewclosed', function(e) {
     dict[key] = value;
   });
   if (!Object.keys(dict).length) return;
+  // Only an explicit Clay Save may change settings on the watch.
+  dict[keys.VG_SETTINGS_SAVE] = 0x5647;
   Pebble.sendAppMessage(dict, function() {
     fields.forEach(function(name) {
       var key = keys[name];

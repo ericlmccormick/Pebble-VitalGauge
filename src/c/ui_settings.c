@@ -29,7 +29,8 @@ static void menu_select_callback(int index, void *context) {
     switch (index) {
         case 0:
             g_dark_mode = !g_dark_mode;
-            persist_write_bool(PERSIST_KEY_DARK_MODE, g_dark_mode);
+            int result = persist_write_int(PERSIST_KEY_DARK_MODE, g_dark_mode ? 1 : 0);
+            APP_LOG(APP_LOG_LEVEL_INFO, "Dark mode watch change: %d, persist result: %d", g_dark_mode, result);
             break;
         case 1:
             g_breath_style = (g_breath_style + 1) % 3;

@@ -209,7 +209,6 @@ static uint8_t s_quiet_motion[1440];
 static uint8_t s_active_motion[1440];
 // Keep API buffers off the constrained Pebble app stack.
 static HealthMinuteData s_history_chunk[CHUNK_SIZE];
-static HealthMinuteData s_history_probe[60];
 static bool s_found_sleep;
 
 static bool find_latest_sleep_cb(HealthActivity activity, time_t start,

@@ -1,4 +1,5 @@
 #include "vitalgauge.h"
+#include "message_keys.auto.h" // Generated from package.json pebble.messageKeys
 
 // ============================================================================
 // --- SECTION 1: APPSYNC KEYS AND STATE ---

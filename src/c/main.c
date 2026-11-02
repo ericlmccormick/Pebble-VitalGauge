@@ -73,12 +73,7 @@ static void init(void) {
     ui_stats_init();
     ui_stress_init();
 
-    // Initialize user settings with defaults
-    g_dark_mode = persist_exists(PERSIST_KEY_DARK_MODE) ? persist_read_bool(PERSIST_KEY_DARK_MODE) : false;
-    g_breath_style = persist_exists(PERSIST_KEY_BREATH_STYLE) ? persist_read_int(PERSIST_KEY_BREATH_STYLE) : 0;
-    g_haptic_level = persist_exists(PERSIST_KEY_HAPTIC_LEVEL) ? persist_read_int(PERSIST_KEY_HAPTIC_LEVEL) : 2;
-    g_backlight_stay_on = persist_exists(PERSIST_KEY_BACKLIGHT) ? persist_read_bool(PERSIST_KEY_BACKLIGHT) : false;
-    
+    // config_sync_init already restored persistent user settings before UI initialization.
     // Initialize Settings UI
     ui_settings_init();
     app_timer_register(1500, publish_settings_cb, NULL);

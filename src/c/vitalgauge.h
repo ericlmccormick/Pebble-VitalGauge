@@ -81,6 +81,7 @@ void health_engine_log_metrics(void);
 
 void config_sync_init(void);
 void config_sync_deinit(void);
+void config_sync_send_settings(void);
 
 void audio_engine_play(uint32_t res_id);
 void audio_engine_stop(void);

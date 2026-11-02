@@ -45,6 +45,7 @@ static void menu_select_callback(int index, void *context) {
             break;
     }
     update_menu_subtitles();
+    config_sync_send_settings();
     // Force a redraw of the main hub so changes (like Dark Mode) apply instantly upon exiting
     ui_hub_mark_dirty();
 }

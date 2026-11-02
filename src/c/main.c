@@ -5,6 +5,7 @@
 // ============================================================================
 static AppTimer *s_health_refresh_timer;
 static bool s_health_subscribed;
+static void publish_settings_cb(void *context) { config_sync_send_settings(); }
 static AppTimer *s_initial_sync_timer;
 #define MORNING_SCAN_DAY_KEY 412
 #define HRV_WORKER_LAUNCH_CONTEXT_KEY 414
@@ -103,6 +104,7 @@ static void init(void) {
     
     // Initialize Settings UI
     ui_settings_init();
+    app_timer_register(1500, publish_settings_cb, NULL);
   
     tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
     s_health_subscribed = health_service_events_subscribe(health_event_cb, NULL);

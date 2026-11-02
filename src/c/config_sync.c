@@ -15,38 +15,31 @@ enum AppSyncKeys {
 // --- SECTION 2: SYNC CALLBACKS ---
 // ============================================================================
 static void sync_tuple_changed_callback(const uint32_t key, const Tuple* new_tuple, const Tuple* old_tuple, void* context) {
-    switch (key) {
-        case SYNC_VOLUME_KEY:
+    if (key == SYNC_VOLUME_KEY) {
             g_volume_level = new_tuple->value->int32;
             persist_write_int(PERSIST_KEY_VOLUME, g_volume_level);
             ui_stress_mark_dirty();
-            break;
-        case SYNC_TARGET_HR_KEY:
+    } else if (key == SYNC_TARGET_HR_KEY) {
             g_target_hr = new_tuple->value->int32;
-            break;
-        case MESSAGE_KEY_VG_DARK_MODE:
+    } else if (key == MESSAGE_KEY_VG_DARK_MODE) {
             g_dark_mode = new_tuple->value->int32 != 0;
             persist_write_bool(PERSIST_KEY_DARK_MODE, g_dark_mode);
             ui_hub_mark_dirty();
             ui_stress_mark_dirty();
             ui_sleep_mark_dirty();
-            break;
-        case MESSAGE_KEY_VG_BREATH_STYLE:
+    } else if (key == MESSAGE_KEY_VG_BREATH_STYLE) {
             if (new_tuple->value->int32 >= 0 && new_tuple->value->int32 <= 2) {
                 g_breath_style = new_tuple->value->int32;
                 persist_write_int(PERSIST_KEY_BREATH_STYLE, g_breath_style);
             }
-            break;
-        case MESSAGE_KEY_VG_HAPTIC_LEVEL:
+    } else if (key == MESSAGE_KEY_VG_HAPTIC_LEVEL) {
             if (new_tuple->value->int32 >= 0 && new_tuple->value->int32 <= 2) {
                 g_haptic_level = new_tuple->value->int32;
                 persist_write_int(PERSIST_KEY_HAPTIC_LEVEL, g_haptic_level);
             }
-            break;
-        case MESSAGE_KEY_VG_BACKLIGHT:
+    } else if (key == MESSAGE_KEY_VG_BACKLIGHT) {
             g_backlight_stay_on = new_tuple->value->int32 != 0;
             persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
-            break;
     }
 }
 

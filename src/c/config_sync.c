@@ -6,6 +6,7 @@
 // ============================================================================
 static AppSync s_sync;
 static uint8_t s_sync_buffer[256];
+static bool s_initializing_sync;
 
 enum AppSyncKeys {
     SYNC_VOLUME_KEY = 0,
@@ -23,22 +24,26 @@ static void sync_tuple_changed_callback(const uint32_t key, const Tuple* new_tup
     } else if (key == SYNC_TARGET_HR_KEY) {
             g_target_hr = new_tuple->value->int32;
     } else if (key == MESSAGE_KEY_VG_DARK_MODE) {
+            if (s_initializing_sync) return;
             g_dark_mode = new_tuple->value->int32 != 0;
             persist_write_bool(PERSIST_KEY_DARK_MODE, g_dark_mode);
             ui_hub_mark_dirty();
             ui_stress_mark_dirty();
             ui_sleep_mark_dirty();
     } else if (key == MESSAGE_KEY_VG_BREATH_STYLE) {
+            if (s_initializing_sync) return;
             if (new_tuple->value->int32 >= 0 && new_tuple->value->int32 <= 2) {
                 g_breath_style = new_tuple->value->int32;
                 persist_write_int(PERSIST_KEY_BREATH_STYLE, g_breath_style);
             }
     } else if (key == MESSAGE_KEY_VG_HAPTIC_LEVEL) {
+            if (s_initializing_sync) return;
             if (new_tuple->value->int32 >= 0 && new_tuple->value->int32 <= 2) {
                 g_haptic_level = new_tuple->value->int32;
                 persist_write_int(PERSIST_KEY_HAPTIC_LEVEL, g_haptic_level);
             }
     } else if (key == MESSAGE_KEY_VG_BACKLIGHT) {
+            if (s_initializing_sync) return;
             g_backlight_stay_on = new_tuple->value->int32 != 0;
             persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
     }
@@ -67,7 +72,9 @@ void config_sync_init() {
         TupletInteger(MESSAGE_KEY_VG_HAPTIC_LEVEL, g_haptic_level),
         TupletInteger(MESSAGE_KEY_VG_BACKLIGHT, g_backlight_stay_on)
     };
+    s_initializing_sync = true;
     app_sync_init(&s_sync, s_sync_buffer, sizeof(s_sync_buffer), initial_values, ARRAY_LENGTH(initial_values), sync_tuple_changed_callback, sync_error_callback, NULL);
+    s_initializing_sync = false;
 }
 
 void config_sync_deinit() {

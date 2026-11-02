@@ -26,7 +26,8 @@ static void sync_tuple_changed_callback(const uint32_t key, const Tuple* new_tup
     } else if (key == MESSAGE_KEY_VG_DARK_MODE) {
             if (s_initializing_sync) return;
             g_dark_mode = new_tuple->value->int32 != 0;
-            persist_write_bool(PERSIST_KEY_DARK_MODE, g_dark_mode);
+            int write_result = persist_write_int(PERSIST_KEY_DARK_MODE, g_dark_mode ? 1 : 0);
+            APP_LOG(APP_LOG_LEVEL_INFO, "Dark mode phone update: %d, persist result: %d", g_dark_mode, write_result);
             ui_hub_mark_dirty();
             ui_stress_mark_dirty();
             ui_sleep_mark_dirty();
@@ -60,7 +61,13 @@ void config_sync_init() {
     if (persist_exists(PERSIST_KEY_VOLUME)) { 
         g_volume_level = persist_read_int(PERSIST_KEY_VOLUME);
     }
-    g_dark_mode = persist_exists(PERSIST_KEY_DARK_MODE) ? persist_read_bool(PERSIST_KEY_DARK_MODE) : false;
+    // Read the legacy bool format (1 byte) or the new integer format (4 bytes).
+    int dark_size = persist_get_size(PERSIST_KEY_DARK_MODE);
+    g_dark_mode = dark_size == (int)sizeof(int32_t)
+        ? persist_read_int(PERSIST_KEY_DARK_MODE) != 0
+        : dark_size == (int)sizeof(bool)
+            ? persist_read_bool(PERSIST_KEY_DARK_MODE) : false;
+    APP_LOG(APP_LOG_LEVEL_INFO, "Dark mode startup: value=%d persisted_size=%d", g_dark_mode, dark_size);
     g_breath_style = persist_exists(PERSIST_KEY_BREATH_STYLE) ? persist_read_int(PERSIST_KEY_BREATH_STYLE) : 0;
     g_haptic_level = persist_exists(PERSIST_KEY_HAPTIC_LEVEL) ? persist_read_int(PERSIST_KEY_HAPTIC_LEVEL) : 2;
     g_backlight_stay_on = persist_exists(PERSIST_KEY_BACKLIGHT) ? persist_read_bool(PERSIST_KEY_BACKLIGHT) : false;

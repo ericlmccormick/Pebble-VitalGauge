@@ -17,7 +17,11 @@
             "SCORE",
             "RHR",
             "READINESS",
-            "WAS_SLEEPING"
+            "WAS_SLEEPING",
+            "VG_DARK_MODE",
+            "VG_BREATH_STYLE",
+            "VG_HAPTIC_LEVEL",
+            "VG_BACKLIGHT"
         ],
         "projectType": "native",
         "resources": {

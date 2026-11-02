@@ -22,5 +22,6 @@ module.exports = [
       ] },
     { type: 'toggle', messageKey: 'VG_BACKLIGHT', label: 'Keep backlight on during scans', defaultValue: false }
   ] },
-  { type: 'text', defaultValue: 'VitalGauge health processing stays entirely on your Pebble Time 2.' }
+  { type: 'text', defaultValue: 'VitalGauge health processing stays entirely on your Pebble Time 2.' },
+  { type: 'submit', defaultValue: 'Save Settings' }
 ];

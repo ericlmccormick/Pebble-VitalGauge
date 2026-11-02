@@ -21,7 +21,8 @@
             "VG_DARK_MODE",
             "VG_BREATH_STYLE",
             "VG_HAPTIC_LEVEL",
-            "VG_BACKLIGHT"
+            "VG_BACKLIGHT",
+            "VG_SETTINGS_SAVE"
         ],
         "projectType": "native",
         "resources": {

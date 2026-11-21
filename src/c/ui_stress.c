@@ -135,6 +135,11 @@ static int hrv_baseline_ms(int *eligible_count) {
     return good[count / 2];
 }
 
+static int hrv_stress_score(int rmssd, int baseline) {
+    int score = 50 + ((baseline - rmssd) * 100) / baseline;
+    return score < 10 ? 10 : score > 100 ? 100 : score;
+}
+
 static void hrv_save_completed(int bpm) {
     if (!s_hrv_active || s_hrv_delta_count < 20 || s_hrv_rmssd <= 0) return;
     int rejected_percent = s_hrv_received ?
@@ -162,10 +167,7 @@ static void hrv_save_completed(int bpm) {
     // Legacy BPM-range scoring remains until baseline is calibrated.
     int n = 0, baseline = hrv_baseline_ms(&n);
     if (baseline > 0 && quality == 2) {
-        int score = 50 + ((s_hrv_rmssd - baseline) * 100) / baseline;
-        if (score < 10) score = 10;
-        if (score > 100) score = 100;
-        persist_write_int(PERSIST_KEY_SCORE, score);
+        persist_write_int(PERSIST_KEY_SCORE, hrv_stress_score(s_hrv_rmssd, baseline));
     }
 }
 
@@ -277,11 +279,13 @@ static int calculate_bpm_range(int *samples, int count) {
     int min = 999;
     // Initialize maximum variable low
     int max = 0;
+    int valid = 0;
     
     // Iterate through sample array
     for(int i = 0; i < count; i++) {
         // Validate sample is a real reading
         if(samples[i] > 0) {
+            ++valid;
             // Update minimum if lower value found
             if(samples[i] < min) min = samples[i];
             // Update maximum if higher value found
@@ -289,8 +293,8 @@ static int calculate_bpm_range(int *samples, int count) {
         }
     }
     
-    // Return zero range if no valid samples were processed
-    if(min == 999) return 0;
+    // Reject sparse samples and completely flat readings.
+    if (valid < count / 2 || max <= min) return -1;
     // Return absolute difference
     return max - min;
 }
@@ -428,7 +432,7 @@ static void unified_timer_callback(void *data) {
             // Constrain the score between 10 and 100, then write to persistent storage
             int eligible = 0;
             int baseline = hrv_baseline_ms(&eligible);
-            if (!(baseline > 0 && s_hrv_delta_count >= HRV_QUALITY_MIN &&
+            if (hr_range >= 0 && !(baseline > 0 && s_hrv_delta_count >= HRV_QUALITY_MIN &&
                   s_hrv_received > 0 && (int)s_hrv_rejected * 10 <= s_hrv_received)) {
                 persist_write_int(PERSIST_KEY_SCORE, (score < 10) ? 10 : (score > 100 ? 100 : score));
             }
@@ -448,9 +452,10 @@ static void unified_timer_callback(void *data) {
         // Check if 5 seconds have elapsed to start calculating live stress
         if (300 - s_session_time_left >= 5) { 
             // Calculate the live stress penalty based on variance
-            int stress = 100 - (calculate_bpm_range(s_bpm_samples, SAMPLE_COUNT) * 8);
+            int range = calculate_bpm_range(s_bpm_samples, SAMPLE_COUNT);
+            int stress = 100 - range * 8;
             // Constrain the live stress value between 10 and 100
-            s_current_stress = (stress < 10) ? 10 : (stress > 100 ? 100 : stress);
+            s_current_stress = range < 0 ? -1 : (stress < 10 ? 10 : stress);
         } 
         
         // Check if there is still time left in the overall breathing session

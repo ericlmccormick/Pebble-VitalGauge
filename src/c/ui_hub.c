@@ -56,19 +56,49 @@ static void play_haptic_tick() {
     vibes_enqueue_custom_pattern(pat);
 }
 
-static void screen_touch_tap_handler(GPoint tapped_coordinate) { 
-    int center_x = 100, center_y = 114;
-    
-    play_haptic_tick();
+typedef enum {
+    HUB_ENERGY, HUB_STRESS, HUB_ACTIVITY, HUB_TRENDS, HUB_SLEEP, HUB_DESTINATION_COUNT
+} HubDestination;
 
-    if (((tapped_coordinate.x - center_x) * (tapped_coordinate.x - center_x) + (tapped_coordinate.y - center_y) * (tapped_coordinate.y - center_y)) <= (35 * 35)) { 
-        recovery_open(); 
-        return; 
-    } 
-    if (tapped_coordinate.x < center_x && tapped_coordinate.y < center_y) ui_stress_push();
-    else if (tapped_coordinate.x >= center_x && tapped_coordinate.y < center_y) ui_activity_push();
-    else if (tapped_coordinate.x < center_x && tapped_coordinate.y >= center_y) ui_history_push();
-    else if (tapped_coordinate.x >= center_x && tapped_coordinate.y >= center_y) ui_sleep_push();
+static HubDestination s_hub_focus;
+static bool s_hub_focus_visible;
+static const GRect s_hub_focus_bounds[] = {
+    {{64, 78}, {72, 72}}, {{0, 0}, {57, 29}}, {{129, 0}, {71, 29}},
+    {{0, 199}, {76, 29}}, {{151, 199}, {49, 29}},
+};
+
+static void open_destination(HubDestination destination) {
+    static void (*const open[])(void) = {
+        recovery_open, ui_stress_push, ui_activity_push, ui_history_push, ui_sleep_push,
+    };
+    play_haptic_tick();
+    open[destination]();
+}
+
+static void screen_touch_tap_handler(GPoint point) {
+    int x = point.x - 100, y = point.y - 114;
+    HubDestination destination = HUB_ENERGY;
+    if (x * x + y * y > 35 * 35) {
+        destination = y < 0 ? (x < 0 ? HUB_STRESS : HUB_ACTIVITY)
+                            : (x < 0 ? HUB_TRENDS : HUB_SLEEP);
+    }
+    s_hub_focus_visible = false;
+    layer_mark_dirty(s_hub_drawing_layer);
+    open_destination(destination);
+}
+
+static void hub_move_focus(ClickRecognizerRef recognizer, void *context) {
+    int direction = click_recognizer_get_button_id(recognizer) == BUTTON_ID_UP ? -1 : 1;
+    s_hub_focus = (s_hub_focus + HUB_DESTINATION_COUNT + direction) % HUB_DESTINATION_COUNT;
+    s_hub_focus_visible = true;
+    play_haptic_tick();
+    layer_mark_dirty(s_hub_drawing_layer);
+}
+
+static void hub_select(ClickRecognizerRef recognizer, void *context) {
+    s_hub_focus_visible = true;
+    layer_mark_dirty(s_hub_drawing_layer);
+    open_destination(s_hub_focus);
 }
 
 static void global_touch_handler(const TouchEvent *event, void *context) { 
@@ -91,6 +121,9 @@ static void hub_long_select_handler(ClickRecognizerRef recognizer, void *context
 
 // Replace the hub_click_config_provider in SECTION 2 of ui_hub.c
 static void hub_click_config_provider(void *context) {
+    window_single_click_subscribe(BUTTON_ID_UP, hub_move_focus);
+    window_single_click_subscribe(BUTTON_ID_DOWN, hub_move_focus);
+    window_single_click_subscribe(BUTTON_ID_SELECT, hub_select);
     window_long_click_subscribe(BUTTON_ID_UP, 500, (ClickHandler)force_sync_handler, NULL);
     window_long_click_subscribe(BUTTON_ID_SELECT, 500, hub_long_select_handler, NULL);
 }
@@ -156,6 +189,15 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, vg_foreground());
   graphics_draw_text(ctx, energy_text, fonts_get_system_font(VG_FONT_NUMBER), 
                      GRect(center_x - 30, center_y - 20, 60, 40), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  if (s_hub_focus_visible) {
+    graphics_context_set_stroke_color(ctx, vg_foreground());
+    graphics_context_set_stroke_width(ctx, 2);
+    if (s_hub_focus == HUB_ENERGY) {
+      graphics_draw_circle(ctx, GPoint(center_x, center_y), 35);
+    } else {
+      graphics_draw_rect(ctx, grect_inset(s_hub_focus_bounds[s_hub_focus], GEdgeInsets(2)));
+    }
+  }
 }
 
 

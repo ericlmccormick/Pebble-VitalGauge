@@ -9,6 +9,13 @@
         "capabilities": [
             "health"
         ],
+        "usesPermissions": [
+            {
+                "name": "Health",
+                "reason": "Show activity, sleep, heart rate, and recovery on your watch",
+                "required": false
+            }
+        ],
         "displayName": "VitalGauge - Advanced Health Monitor ",
         "enableMultiJS": true,
         "messageKeys": [
@@ -63,5 +70,5 @@
             "watchface": false
         }
     },
-    "version": "2.4.0"
+    "version": "2.5.0"
 }

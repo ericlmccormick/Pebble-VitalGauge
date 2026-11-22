@@ -1,6 +1,6 @@
 # VitalGauge — Advanced Health Monitor
 
-**Current source version:** 2.5.0. **Platform:** Emery (Pebble Time 2).
+**Current source version:** 2.6.0. **Platform:** Emery (Pebble Time 2).
 
 VitalGauge is a watch-local health and guided-breathing app. Health processing stays on the watch; the current manifest requests the Pebble Health capability.
 

@@ -34,6 +34,43 @@ void ui_settings_refresh(void) {
     layer_mark_dirty(simple_menu_layer_get_layer(s_simple_menu_layer));
 }
 
+static Window *s_backlight_window;
+static SimpleMenuLayer *s_backlight_menu;
+static SimpleMenuItem s_backlight_items[2];
+static SimpleMenuSection s_backlight_section;
+
+static void backlight_select(int index, void *context) {
+    g_backlight_stay_on = index == 1;
+    persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
+    config_sync_send_settings();
+    ui_settings_refresh();
+    window_stack_pop(true);
+}
+
+static void backlight_load(Window *window) {
+    s_backlight_items[0] = (SimpleMenuItem){
+        .title = "Auto", .subtitle = "Use system backlight", .callback = backlight_select
+    };
+    s_backlight_items[1] = (SimpleMenuItem){
+        .title = "Stay On", .subtitle = "During scan or breathing", .callback = backlight_select
+    };
+    s_backlight_section = (SimpleMenuSection){.items = s_backlight_items, .num_items = 2};
+    Layer *root = window_get_root_layer(window);
+    s_backlight_menu = simple_menu_layer_create(layer_get_bounds(root), window,
+                                                &s_backlight_section, 1, NULL);
+    MenuLayer *menu = simple_menu_layer_get_menu_layer(s_backlight_menu);
+    menu_layer_set_normal_colors(menu, vg_background(), vg_foreground());
+    menu_layer_set_highlight_colors(menu, vg_foreground(), vg_background());
+    window_set_background_color(window, vg_background());
+    layer_add_child(root, simple_menu_layer_get_layer(s_backlight_menu));
+    simple_menu_layer_set_selected_index(s_backlight_menu, g_backlight_stay_on ? 1 : 0, false);
+}
+
+static void backlight_unload(Window *window) {
+    simple_menu_layer_destroy(s_backlight_menu);
+    s_backlight_menu = NULL;
+}
+
 static void menu_select_callback(int index, void *context) {
     if (g_haptic_level > 0) vibes_short_pulse();
     switch (index) {
@@ -49,9 +86,8 @@ static void menu_select_callback(int index, void *context) {
             persist_write_int(PERSIST_KEY_HAPTIC_LEVEL, g_haptic_level);
             break;
         case 3:
-            g_backlight_stay_on = !g_backlight_stay_on;
-            persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
-            break;
+            window_stack_push(s_backlight_window, true);
+            return;
         case 4:
             g_background_enabled = !g_background_enabled;
             persist_write_bool(VG_BG_KEY, g_background_enabled);
@@ -118,6 +154,10 @@ static void settings_window_unload(Window *window) {
 }
 
 void ui_settings_init(void) {
+    s_backlight_window = window_create();
+    window_set_window_handlers(s_backlight_window, (WindowHandlers){
+        .load = backlight_load, .unload = backlight_unload
+    });
     s_settings_window = window_create();
     window_set_window_handlers(s_settings_window, (WindowHandlers) {
         .load = settings_window_load,
@@ -126,6 +166,7 @@ void ui_settings_init(void) {
 }
 
 void ui_settings_deinit(void) {
+    window_destroy(s_backlight_window);
     window_destroy(s_settings_window);
 }
 

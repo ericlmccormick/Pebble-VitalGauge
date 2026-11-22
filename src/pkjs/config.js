@@ -26,7 +26,8 @@ module.exports = [
         { label: 'Low', value: '1' },
         { label: 'High', value: '2' }
       ] },
-    { type: 'toggle', messageKey: 'VG_BACKLIGHT', label: 'Keep backlight on during scans', defaultValue: false }
+    { type: 'select', messageKey: 'VG_BACKLIGHT', label: 'Scan Backlight', defaultValue: '0',
+      options: [{label: 'Auto', value: '0'}, {label: 'Stay On', value: '1'}] }
   ] },
   { type: 'section', items: [
     { type: 'heading', defaultValue: 'Monitoring' },

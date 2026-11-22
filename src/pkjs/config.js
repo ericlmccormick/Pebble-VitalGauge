@@ -1,17 +1,17 @@
 // Clay page bundled into the Pebble phone app. No website or cloud required.
 module.exports = [
   { type: 'heading', defaultValue: 'VitalGauge Settings' },
-  { type: 'text', defaultValue: 'These options also remain available on the watch by holding Select.' },
-  { type: 'section', items: [
-    { type: 'heading', defaultValue: 'Appearance' },
-    { type: 'select', messageKey: 'VG_DARK_MODE', label: 'Theme', defaultValue: '2',
-      description: 'Auto follows sunrise and sunset from your Pebble weather source.',
+  {type: 'section', items: [
+    {type: 'heading', defaultValue: 'Appearance'},
+    {type: 'select', messageKey: 'VG_DARK_MODE', label: 'Theme', defaultValue: '2',
+      description: 'Auto follows sunrise and sunset. Without saved times, Day runs from 7 a.m. to 7 p.m.',
       options: [
-        { label: 'Day', value: '0' },
-        { label: 'Night', value: '1' },
-        { label: 'Auto', value: '2' }
-      ] }
-  ] },
+        {label: 'Day', value: '0'},
+        {label: 'Night', value: '1'},
+        {label: 'Auto', value: '2'}
+      ]}
+  ]},
+  { type: 'text', defaultValue: 'These options also remain available on the watch by holding Select.' },
   { type: 'section', items: [
     { type: 'heading', defaultValue: 'Breathing & Feedback' },
     { type: 'select', messageKey: 'VG_BREATH_STYLE', label: 'Breathing pattern', defaultValue: '0',

@@ -1,4 +1,5 @@
 #include "vitalgauge.h"
+#include "../../shared/hrv.h"
 
 // ============================================================================
 // --- SECTION 1: STRESS MODULE CONFIGURATION ---
@@ -35,7 +36,10 @@ static int s_breath_phase = 0;
 // Declare integer tracking remaining time in breathing session
 static int s_session_time_left = 300;
 // Declare integer storing the calculated stress score
-static int s_current_stress = -1;
+static int s_scan_result = -2;
+static int s_live_bpm;
+static time_t s_live_bpm_time;
+static bool s_bpm_requested;
 // Declare integer storing heart rate at start of breathing session
 static int s_breath_start_hr = 0;
 // Declare integer storing heart rate at end of breathing session
@@ -60,79 +64,34 @@ static const struct EKGPoint ekg_pts[] = {
 
 };
 
-#define HRV_SAMPLES 60
-static uint32_t hrv_sqrt(uint32_t n);
-static void start_stress_scan(bool automatic);
-static uint32_t s_hrv_delta_squares;
-static uint16_t s_hrv_delta_count;
-static uint16_t s_hrv_accepted_total;
-static uint16_t s_hrv_previous;
-static uint16_t s_hrv_intervals[HRV_SAMPLES];
-static uint8_t s_hrv_count;
-static int s_hrv_rmssd;
-static bool s_hrv_active;
-// HRV history: compact fixed-size circular log (~192 bytes).
-// Baseline uses only good manual scans, not elevated-HR auto-trigger scans.
 #define HRV_HISTORY_KEY 410
 #define HRV_HISTORY_CAP 16
-#define HRV_CALIBRATION_DAYS_KEY 413
-#define HRV_REST_PENDING_KEY 416
-#define HRV_QUALITY_MIN 40
 #define HRV_BASELINE_MIN 7
+
 typedef struct {
     uint32_t timestamp;
-    uint16_t rmssd;
-    uint16_t bpm;
-    uint8_t accepted;
-    uint8_t rejected;
-    uint8_t quality; // 0 poor, 1 fair, 2 good
-    uint8_t automatic;
+    uint16_t rmssd, bpm;
+    uint8_t accepted, rejected, quality, automatic;
 } HRVRecord;
+
 static HRVRecord s_hrv_history[HRV_HISTORY_CAP];
 static uint8_t s_hrv_count_history;
-static uint8_t s_scan_context; // 0 manual, 1 elevated pulse, 2 morning recovery
-#define HRV_MORNING_DAY_KEY 411
-static uint8_t s_hrv_rejected;
-static uint8_t s_hrv_received;
-static time_t s_hrv_last_event;
+static uint8_t s_scan_context;
+static VGPulseScan s_ppi;
+static bool s_hrv_active;
+static bool s_rest_candidate;
 
-static int hrv_baseline_ms(int *eligible_count) {
-    uint16_t good[HRV_HISTORY_CAP];
-    int count = 0;
-    time_t limit = time(NULL) - 30 * 86400;
-    // Keep previously saved good manual scans (context 0) eligible while
-    // preferentially selecting a good morning scan (context 2) per day.
-    // Elevated-HR scans (context 1) never establish resting baseline.
-    for (int i = 0; i < s_hrv_count_history; ++i) {
-        HRVRecord *r = &s_hrv_history[i];
-        if (r->quality != 2 || r->automatic == 1 ||
-            r->timestamp < (uint32_t)limit) continue;
-        bool better_same_day = false;
-        for (int j = 0; j < s_hrv_count_history; ++j) {
-            if (i == j) continue;
-            HRVRecord *other = &s_hrv_history[j];
-            if (other->quality != 2 || other->automatic == 1 ||
-                other->timestamp < (uint32_t)limit ||
-                other->timestamp / 86400 != r->timestamp / 86400) continue;
-            if ((other->automatic == 2 && r->automatic != 2) ||
-                (other->automatic == r->automatic && j > i)) {
-                better_same_day = true;
-                break;
-            }
-        }
-        if (!better_same_day) good[count++] = r->rmssd;
-    }
-    *eligible_count = count;
-    if (!persist_exists(HRV_CALIBRATION_DAYS_KEY) ||
-        persist_read_int(HRV_CALIBRATION_DAYS_KEY) != count)
-        persist_write_int(HRV_CALIBRATION_DAYS_KEY, count);
-    if (count < HRV_BASELINE_MIN) return 0;
-    for (int i = 1; i < count; ++i) {
-        uint16_t v = good[i]; int j = i;
-        while (j > 0 && good[j - 1] > v) { good[j] = good[j - 1]; --j; }
-        good[j] = v;
-    }
-    return good[count / 2];
+int ui_stress_hrv_baseline_before(time_t cutoff, int *days) {
+    return vg_resting_hrv(cutoff, true, cutoff, days);
+}
+
+int ui_stress_hrv_baseline(int *days) {
+    return ui_stress_hrv_baseline_before(time(NULL), days);
+}
+
+int ui_stress_resting_hrv(time_t from, time_t to) {
+    int days;
+    return from > 0 ? vg_resting_hrv(from, false, to, &days) : 0;
 }
 
 static int hrv_stress_score(int rmssd, int baseline) {
@@ -141,115 +100,71 @@ static int hrv_stress_score(int rmssd, int baseline) {
 }
 
 static void hrv_save_completed(int bpm) {
-    if (!s_hrv_active || s_hrv_delta_count < 20 || s_hrv_rmssd <= 0) return;
-    int rejected_percent = s_hrv_received ?
-        ((int)s_hrv_rejected * 100 / s_hrv_received) : 100;
-    // Quality is conservative until consecutive PPI continuity can be verified.
-    uint8_t quality = (s_hrv_delta_count >= HRV_QUALITY_MIN &&
-                       rejected_percent <= 10) ? 2 :
-                      (s_hrv_delta_count >= 20 && rejected_percent <= 25) ? 1 : 0;
-    if (s_hrv_count_history >= HRV_HISTORY_CAP) {
-        memmove(s_hrv_history, s_hrv_history + 1,
-                (HRV_HISTORY_CAP - 1) * sizeof(HRVRecord));
-        s_hrv_count_history = HRV_HISTORY_CAP - 1;
+    time_t now = time(NULL);
+    int quality = s_hrv_active ? vg_ppi_quality(&s_ppi, now) : 0;
+    unsigned rmssd = vg_rmssd(&s_ppi);
+    bool quiet = vg_was_quiet(now, 60, 5);
+    if (rmssd && quality) {
+        if (s_hrv_count_history == HRV_HISTORY_CAP) {
+            memmove(s_hrv_history, s_hrv_history + 1,
+                    (HRV_HISTORY_CAP - 1) * sizeof(HRVRecord));
+            --s_hrv_count_history;
+        }
+        s_hrv_history[s_hrv_count_history++] = (HRVRecord){
+            .timestamp = now, .rmssd = rmssd, .bpm = bpm,
+            .accepted = vg_clamp(s_ppi.received - s_ppi.rejected, 0, 255),
+            .rejected = vg_clamp(s_ppi.rejected, 0, 255),
+            .quality = quality, .automatic = s_scan_context
+        };
+        persist_write_data(HRV_HISTORY_KEY, s_hrv_history,
+                           s_hrv_count_history * sizeof(HRVRecord));
     }
-    HRVRecord *record = &s_hrv_history[s_hrv_count_history++];
-    *record = (HRVRecord){.timestamp=(uint32_t)time(NULL),
-        .rmssd=(uint16_t)s_hrv_rmssd, .bpm=(uint16_t)(bpm > 0 ? bpm : 0),
-        .accepted=(uint8_t)(s_hrv_accepted_total > 255 ? 255 : s_hrv_accepted_total), .rejected=s_hrv_rejected,
-        .quality=quality, .automatic=s_scan_context};
-    persist_write_data(HRV_HISTORY_KEY, s_hrv_history,
-                       s_hrv_count_history * sizeof(HRVRecord));
-    if (s_scan_context == 2) persist_delete(HRV_REST_PENDING_KEY);
-    APP_LOG(APP_LOG_LEVEL_INFO,
-            "HRV completed RMSSD=%d quality=%d accepted=%d rejected=%d auto=%d",
-            s_hrv_rmssd, quality, s_hrv_accepted_total, s_hrv_rejected, s_scan_context);
-    // Legacy BPM-range scoring remains until baseline is calibrated.
-    int n = 0, baseline = hrv_baseline_ms(&n);
-    if (baseline > 0 && quality == 2) {
-        persist_write_int(PERSIST_KEY_SCORE, hrv_stress_score(s_hrv_rmssd, baseline));
+    int days;
+    int baseline = ui_stress_hrv_baseline(&days);
+    s_scan_result = -1;
+    if (quality == 2 && rmssd && bpm && quiet) {
+        if (baseline > 0) {
+            s_scan_result = hrv_stress_score(rmssd, baseline);
+            VGStressReading reading = {.timestamp = now, .score = s_scan_result};
+            persist_write_data(VG_STRESS_KEY, &reading, sizeof(reading));
+        }
+        if (s_rest_candidate && g_sleep_end > 0 && now >= g_sleep_end &&
+            now - g_sleep_end <= 2 * 3600 && !s_scan_context)
+            vg_record_resting_hrv(VG_HRV_DAYS_KEY, now, rmssd);
     }
-}
-
-
-
-static uint32_t hrv_sqrt(uint32_t n) {
-    uint32_t r = 0, bit = (uint32_t)1 << 30;
-    while (bit > n) bit >>= 2;
-    while (bit) {
-        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; }
-        else r >>= 1;
-        bit >>= 2;
-    }
-    return r;
-}
-
-static void hrv_begin(void) {
-    memset(s_hrv_intervals, 0, sizeof(s_hrv_intervals));
-    s_hrv_count = 0;
-    s_hrv_rmssd = 0;
-    s_hrv_rejected = 0;
-    s_hrv_received = 0;
-    s_hrv_last_event = 0;
-    s_hrv_delta_squares = 0;
-    s_hrv_delta_count = 0;
-    s_hrv_accepted_total = 0;
-    s_hrv_previous = 0;
-    s_hrv_active = health_service_set_hrv_sample_period(1);
 }
 
 static void hrv_end(void) {
     if (s_hrv_active) health_service_set_hrv_sample_period(0);
     s_hrv_active = false;
+    s_bpm_requested = false;
+    persist_delete(VG_SCAN_BUSY_KEY);
 }
 
 void ui_stress_hrv_update(void) {
     if (!s_hrv_active || !s_is_scanning) return;
-    uint16_t ppi = health_service_peek_hrv_ppi_ms();
-    if (s_hrv_received < 255) ++s_hrv_received;
-    time_t now = time(NULL);
-    if (ppi < 400 || ppi > 1500) {
-        if (s_hrv_rejected < 255) ++s_hrv_rejected;
-        s_hrv_previous = 0;
-        return;
-    }
-    // Only differences between adjacent, uninterrupted valid beats count.
-    if (s_hrv_last_event && now - s_hrv_last_event > 3)
-        s_hrv_previous = 0;
-    s_hrv_last_event = now;
-    if (s_hrv_previous) {
-        int delta = (int)ppi - (int)s_hrv_previous;
-        if (delta > 250 || delta < -250) {
-            if (s_hrv_rejected < 255) ++s_hrv_rejected;
-            s_hrv_previous = 0;
-            return;
-        }
-        s_hrv_delta_squares += (uint32_t)(delta * delta);
-        ++s_hrv_delta_count;
-    }
-    s_hrv_previous = ppi;
-    ++s_hrv_accepted_total;
-    // Use all consecutive accepted pairs, not only the last 60 samples.
-    if (s_hrv_delta_count >= 20)
-        s_hrv_rmssd = (int)hrv_sqrt(s_hrv_delta_squares / s_hrv_delta_count);
-    ui_stress_mark_dirty();
+    vg_record_ppi(&s_ppi, time(NULL), health_service_peek_hrv_ppi_ms());
 }
 
-int ui_stress_hrv_baseline(int *days) {
-    return hrv_baseline_ms(days);
+void ui_stress_bpm_update(void) {
+    if (!s_bpm_requested || !(s_is_scanning || s_is_breathing)) return;
+    int bpm = health_service_peek_current_value(HealthMetricHeartRateRawBPM);
+    if (vg_hr_band(bpm) < 0) {
+        s_live_bpm = 0;
+        return;
+    }
+    time_t now = time(NULL);
+    if (now == s_live_bpm_time) return;
+    s_live_bpm = bpm;
+    s_live_bpm_time = now;
+    memmove(s_bpm_samples, s_bpm_samples + 1, (SAMPLE_COUNT - 1) * sizeof(int));
+    s_bpm_samples[SAMPLE_COUNT - 1] = bpm;
+    if (s_is_breathing && !s_breath_start_hr && s_session_time_left > 280)
+        s_breath_start_hr = bpm;
 }
-time_t ui_stress_latest_hrv_time(void) {
-    return s_hrv_count_history ?
-        (time_t)s_hrv_history[s_hrv_count_history - 1].timestamp : 0;
-}
-int ui_stress_latest_hrv(void) {
-    return s_hrv_count_history ?
-        s_hrv_history[s_hrv_count_history - 1].rmssd : 0;
-}
-void ui_stress_start_morning(void) {
-    ui_stress_push();
-    start_stress_scan(true);
-    s_scan_context = 2;
+
+static int current_scan_bpm(void) {
+    return time(NULL) - s_live_bpm_time <= 5 ? s_live_bpm : 0;
 }
 
 // ============================================================================
@@ -397,46 +312,18 @@ static void unified_timer_callback(void *data) {
     // Initialize restart flag to false
     bool restart = false;
 
-    // Peek the current Heart Rate from the health service
-    HealthValue bpm = health_service_peek_current_value(HealthMetricHeartRateBPM);
-    
-    // Check if the heart rate is valid (greater than 0)
-    if (bpm > 0) { 
-        // Shift all existing samples in the array one position to the left
-        for(int i = 0; i < SAMPLE_COUNT - 1; i++) {
-            // Assign the next sample to the current index
-            s_bpm_samples[i] = s_bpm_samples[i+1];
-        }
-        // Insert the newest valid BPM reading at the end of the array
-        s_bpm_samples[SAMPLE_COUNT - 1] = bpm;
-    }
-
-    // Check if the app is currently in scanning mode
-    if (s_is_scanning) { 
-        // Decrement scan ticks and check if it has reached zero
-        if (--s_scan_ticks <= 0) { 
-            // Stop the scan flag
+    int bpm = current_scan_bpm();
+    if (s_is_scanning) {
+        int elapsed = time(NULL) - s_ppi.started;
+        s_scan_ticks = vg_clamp(60 - elapsed, 0, 60);
+        if (!s_scan_ticks) {
             s_is_scanning = false;
-            hrv_save_completed((int)bpm);
-            hrv_end(); 
-            // Hide the EKG graphical layer
-            layer_set_hidden(s_ekg_layer, true); 
-            // Turn off the active heart rate sampling
-            health_service_set_heart_rate_sample_period(0); 
-            // Turn off the backlight if the override was active
+            hrv_save_completed(bpm);
+            hrv_end();
+            layer_set_hidden(s_ekg_layer, true);
+            health_service_set_heart_rate_sample_period(0);
             if (g_backlight_stay_on) light_enable(false);
-            // Calculate the variance range using the LAST 60 collected samples
-            int hr_range = calculate_bpm_range(&s_bpm_samples[SAMPLE_COUNT - 60], 60);
-            // Calculate the stress score based on the variance
-            int score = 100 - (hr_range * 8);
-            // Constrain the score between 10 and 100, then write to persistent storage
-            int eligible = 0;
-            int baseline = hrv_baseline_ms(&eligible);
-            if (hr_range >= 0 && !(baseline > 0 && s_hrv_delta_count >= HRV_QUALITY_MIN &&
-                  s_hrv_received > 0 && (int)s_hrv_rejected * 10 <= s_hrv_received)) {
-                persist_write_int(PERSIST_KEY_SCORE, (score < 10) ? 10 : (score > 100 ? 100 : score));
-            }
-            
+            health_engine_update_buffers();
             // Trigger a double pulse haptic alert if haptics are enabled
             if (g_haptic_level > 0 && s_scan_context == 0) vibes_double_pulse(); 
             // Mark the main hub UI for a redraw to update the stress ring
@@ -449,15 +336,6 @@ static void unified_timer_callback(void *data) {
         
     // Check if the app is currently in breathing mode
     } else if (s_is_breathing) { 
-        // Check if 5 seconds have elapsed to start calculating live stress
-        if (300 - s_session_time_left >= 5) { 
-            // Calculate the live stress penalty based on variance
-            int range = calculate_bpm_range(s_bpm_samples, SAMPLE_COUNT);
-            int stress = 100 - range * 8;
-            // Constrain the live stress value between 10 and 100
-            s_current_stress = range < 0 ? -1 : (stress < 10 ? 10 : stress);
-        } 
-        
         // Check if there is still time left in the overall breathing session
         if (s_session_time_left > 0) { 
             // Decrement the current breathing phase time
@@ -501,7 +379,8 @@ static void unified_timer_callback(void *data) {
             // Turn off the backlight if the override was active
             if (g_backlight_stay_on) light_enable(false);
             // Record the ending heart rate value
-            s_breath_end_hr = (int)health_service_peek_current_value(HealthMetricHeartRateBPM);
+            s_breath_end_hr = bpm;
+            hrv_end();
             // Trigger a double pulse haptic alert to signal completion
             if (g_haptic_level > 0) vibes_double_pulse(); 
             // Mark the main hub UI for a redraw
@@ -518,11 +397,9 @@ static void unified_timer_callback(void *data) {
 // ============================================================================
 // Procedure rendering the live EKG wave layer
 static void ekg_update_proc(Layer *layer, GContext *ctx) {
-    // Query current BPM for rendering speed
-    int current_bpm = (int)health_service_peek_current_value(HealthMetricHeartRateBPM);
-    // Set default baseline if sensor fails to return value
-    if (current_bpm == 0) current_bpm = 70;
-    
+    int current_bpm = current_scan_bpm();
+    if (!current_bpm) return;
+
     // Calculate physical pixel width of one complete heartbeat pulse
     int pulse_width = (60 * 80) / current_bpm;
     // Enforce minimum width to prevent rendering collapse
@@ -570,12 +447,16 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         // Default breathing circle color to blue
         GColor breath_color = GColorPictonBlue;
         
-        // Apply color mapping based on live stress score if calculated
-        if (s_current_stress != -1) { 
-            if (s_current_stress > 75) breath_color = GColorRed;
-            else if (s_current_stress >= 40) breath_color = GColorChromeYellow;
-            else breath_color = GColorJaegerGreen;
-        } 
+        int current_bpm = current_scan_bpm();
+        if (current_bpm) {
+            int range = calculate_bpm_range(s_bpm_samples, SAMPLE_COUNT);
+            if (range >= 0) snprintf(buf, sizeof(buf), "%d BPM  |  Range %d", current_bpm, range);
+            else snprintf(buf, sizeof(buf), "%d BPM", current_bpm);
+            graphics_context_set_text_color(ctx, vg_foreground());
+            graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_BODY),
+                               GRect(10, 181, 180, 25), GTextOverflowModeFill,
+                               GTextAlignmentCenter, NULL);
+        }
 
         // Render external solid perimeter ring matching state color
         draw_perimeter_segment(ctx, 0, 856, 10, breath_color);
@@ -614,15 +495,14 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 
     // Render post-session summary if flagged
     } else if (s_show_breath_summary) { 
-        // Calculate net reduction in heart rate over session
-        int drop = s_breath_start_hr - s_breath_end_hr;
-        // Restrict negative outputs mathematically
-        if (drop < 0) drop = 0;
-        
-        // Format summary readout into buffer
-        snprintf(buf, sizeof(buf), "Session Complete\n\nStart HR: %d\nEnd HR: %d\n\nDropped: %d BPM\n\n[Press Select to Exit]", 
-                 s_breath_start_hr, s_breath_end_hr, drop);
-                 
+        char start[12] = "--", end[12] = "--", change[20] = "--";
+        if (s_breath_start_hr) snprintf(start, sizeof(start), "%d", s_breath_start_hr);
+        if (s_breath_end_hr) snprintf(end, sizeof(end), "%d", s_breath_end_hr);
+        if (s_breath_start_hr && s_breath_end_hr)
+            snprintf(change, sizeof(change), "%+d BPM", s_breath_end_hr - s_breath_start_hr);
+        snprintf(buf, sizeof(buf), "Session complete\nStart HR %s\nEnd HR %s\nChange %s\nSelect to exit",
+                 start, end, change);
+
         // Configure context and render formatted summary
         graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_TITLE), 
@@ -630,25 +510,21 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 
     // Render diagnostic EKG view if flagged
     } else if (s_is_scanning) { 
-        // Query live heart rate from sensor
-        int current_bpm = (int)health_service_peek_current_value(HealthMetricHeartRateBPM);
-        // Set default baseline if sensor fails to return value
-        if (current_bpm == 0) current_bpm = 70;
-
-        // Format live BPM readout into buffer
-        snprintf(buf, sizeof(buf), "%d BPM", current_bpm);
+        int current_bpm = current_scan_bpm();
+        if (current_bpm) snprintf(buf, sizeof(buf), "%d BPM", current_bpm);
+        else snprintf(buf, sizeof(buf), "Collecting pulse");
         // Configure context and render live BPM
         graphics_context_set_text_color(ctx, vg_foreground());
         graphics_draw_text(ctx, buf, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
                            GRect(10, 30, 180, 40), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         // Format countdown string into buffer
-        snprintf(buf, sizeof(buf), "MEASURING HRV\n%d sec", s_scan_ticks);
+        snprintf(buf, sizeof(buf), "%s\n%d sec", s_hrv_active ? "OPTICAL HRV" : "PULSE SCAN", s_scan_ticks);
         // Configure context and render countdown
         graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_TITLE), 
                            GRect(10, 150, 180, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-        if (s_hrv_delta_count >= 20) {
-            snprintf(buf, sizeof(buf), "HRV %d ms  |  %d beats", s_hrv_rmssd, (int)s_hrv_accepted_total);
+        if (s_ppi.pairs >= 20) {
+            snprintf(buf, sizeof(buf), "HRV %u ms  |  %u pairs", vg_rmssd(&s_ppi), (unsigned)s_ppi.pairs);
             graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_BODY),
                                GRect(10, 192, 180, 28), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
@@ -658,7 +534,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
     // Render default informational view if idle
     } else { 
         // Establish boundary for end of current day
-        time_t midnight = time_start_of_today() + (24 * 3600);
+        time_t now = time(NULL);
         // Establish boundary for start of waking tracking
         time_t wake_time = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600);
         
@@ -668,7 +544,7 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         if (wake_idx < 0) wake_idx = 0;
         
         // Calculate total minutes to track for the current day
-        int total_day_mins = (midnight - wake_time) / 60;
+        int total_day_mins = (now - wake_time) / 60;
         // Enforce boundary fallback mathematically
         if (total_day_mins <= 0) total_day_mins = 1440;
 
@@ -682,7 +558,13 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
         int current_p = 0;
         
         // Initialize tracking counters for metric aggregation
-        int c_normal = 0, c_elevated = 0, c_high = 0, c_peak = 0;
+        int bands[4] = {0};
+        for (int i = wake_idx * 10; i < 1440; ++i) {
+            if (g_24h_start + i * 60 < wake_time) continue;
+            int band = vg_hr_band(health_engine_minute_hr(i));
+            if (band >= 0) ++bands[band];
+        }
+        int c_normal = bands[0], c_elevated = bands[1], c_high = bands[2], c_peak = bands[3];
 
         // Iterate through all 10-minute buckets from wake time onwards
         for (int b = wake_idx; b < 144; b++) { 
@@ -699,14 +581,14 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 
                 // Determine segment color and increment appropriate aggregate counter
                 GColor c;
-                if (last_known_bpm > 120) { c = GColorRed; c_peak+=10; } 
-                else if (last_known_bpm > 100) { c = GColorOrange; c_high+=10; } 
-                else if (last_known_bpm > 80) { c = GColorJaegerGreen; c_elevated+=10; } 
-                else { c = GColorPictonBlue; c_normal+=10; }
+                if (last_known_bpm > 120) { c = GColorRed; }
+                else if (last_known_bpm > 100) { c = GColorOrange; }
+                else if (last_known_bpm > 80) { c = GColorJaegerGreen; }
+                else { c = GColorPictonBlue; }
 
                 // Map logical time offset to physical perimeter pixel (100% = 856)
                 int minute_offset = (b - wake_idx) * 10;
-                int p = (minute_offset * 856) / total_day_mins;
+                int p = vg_clamp((minute_offset * 856) / total_day_mins, 0, 855);
 
                 // Start new drawing group if none active
                 if (group_start_p == -1) { 
@@ -739,37 +621,41 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
             graphics_fill_circle(ctx, get_perimeter_point(current_p, current_thickness), current_thickness / 2);
         } 
 
-        // Query current live BPM
-        int live_bpm = (int)health_service_peek_current_value(HealthMetricHeartRateBPM);
-        // Query stored stress score, defaulting to 50
-        int score = persist_exists(PERSIST_KEY_SCORE) ? persist_read_int(PERSIST_KEY_SCORE) : 50; 
-        
-        // Configure context and render title
-        graphics_context_set_text_color(ctx, vg_foreground());
-        graphics_draw_text(ctx, "STRESS", fonts_get_system_font(VG_FONT_TITLE), 
-                           GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-
-        // Format and render current score and live BPM
-        char top_buf[64];
+        int score = s_scan_result == -1 ? -1 : health_engine_stress_score();
         int days = 0;
-        int baseline = hrv_baseline_ms(&days);
-        snprintf(top_buf, sizeof(top_buf), "Score: %d/100  HR: %d\nHRV %s: %d/%d days",
-                 score, live_bpm, baseline ? "ready" : "calibrate",
-                 days, HRV_BASELINE_MIN);
-        graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
+        int baseline = ui_stress_hrv_baseline(&days);
+        char top_buf[96];
+        if (score >= 0)
+            snprintf(top_buf, sizeof(top_buf), "Stress %d/100\nHeart rate history", score);
+        else if (s_scan_result == -1 && baseline)
+            snprintf(top_buf, sizeof(top_buf), "Stress unavailable\nInsufficient scan data");
+        else if (baseline)
+            snprintf(top_buf, sizeof(top_buf), "No recent stress scan\nHeart rate history");
+        else
+            snprintf(top_buf, sizeof(top_buf), "HRV calibration %d/%d days\nHeart rate history",
+                     days, HRV_BASELINE_MIN);
+        graphics_context_set_text_color(ctx, vg_foreground());
+        graphics_draw_text(ctx, "STRESS", fonts_get_system_font(VG_FONT_TITLE),
+                           GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+        graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY),
                            GRect(0, 38, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
         if (s_hrv_count_history > 0) {
             HRVRecord *last = &s_hrv_history[s_hrv_count_history - 1];
+            time_t stamp = last->timestamp;
+            struct tm *date = localtime(&stamp);
+            char day[14] = "";
+            if (date) strftime(day, sizeof(day), "%b %d", date);
             char hrv_text[60];
-            snprintf(hrv_text, sizeof(hrv_text), "Last HRV %u ms  %s",
-                     (unsigned)last->rmssd,
-                     last->quality == 2 ? "Good" :
-                     last->quality == 1 ? "Fair" : "Poor");
-            graphics_draw_text(ctx, hrv_text,
-                               fonts_get_system_font(VG_FONT_HINT),
+            snprintf(hrv_text, sizeof(hrv_text), "%s HRV %u ms %s", day, (unsigned)last->rmssd,
+                     last->quality == 2 ? "good" : "fair");
+            graphics_draw_text(ctx, hrv_text, fonts_get_system_font(VG_FONT_HINT),
                                GRect(0, 78, 200, 19), GTextOverflowModeWordWrap,
                                GTextAlignmentCenter, NULL);
+        } else if (s_scan_result == -1 && current_scan_bpm()) {
+            snprintf(buf, sizeof(buf), "Pulse %d BPM", current_scan_bpm());
+            graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_HINT),
+                               GRect(0, 78, 200, 19), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
         }
         // Establish layout grid for lower statistics column
         int y_start = 100;
@@ -821,17 +707,19 @@ static void stress_update_proc(Layer *layer, GContext *ctx) {
 
 static void start_breathing_session() {
     s_show_breath_summary = false; s_is_breathing = true; 
-    s_session_time_left = 300; memset(s_bpm_samples, 0, sizeof(s_bpm_samples)); s_current_stress = -1;
+    s_session_time_left = 300;
+    s_live_bpm = s_breath_start_hr = s_breath_end_hr = 0;
+    s_live_bpm_time = 0;
+    memset(s_bpm_samples, 0, sizeof(s_bpm_samples));
     
     s_breath_phase = 0; 
     s_phase_time_left = get_phase_duration(g_breath_style, s_breath_phase);
     start_radius_animation(20, 80, s_phase_time_left * 1000);
     app_timer_register(10, deferred_audio_callback, (void*)(intptr_t)s_breath_phase);
     
-    health_service_set_heart_rate_sample_period(1);
-    s_breath_start_hr = (int)health_service_peek_current_value(HealthMetricHeartRateBPM);
-    if (s_breath_start_hr == 0) s_breath_start_hr = 70;
-    
+    persist_write_int(VG_SCAN_BUSY_KEY, time(NULL) + 330);
+    s_bpm_requested = health_service_set_heart_rate_sample_period(1);
+
     if (g_backlight_stay_on) light_enable(true);
     if (!s_unified_timer) s_unified_timer = app_timer_register(1000, unified_timer_callback, NULL);
     if (s_stress_canvas) layer_mark_dirty(s_stress_canvas);
@@ -842,11 +730,17 @@ static void start_stress_scan(bool automatic) {
     s_show_breath_summary = false;
     s_is_scanning = true;
     s_scan_context = automatic ? 1 : 0;
-    hrv_begin();
+    time_t now = time(NULL);
+    s_live_bpm = 0;
+    s_live_bpm_time = 0;
+    s_ppi = (VGPulseScan){.started = now};
+    s_rest_candidate = vg_was_quiet(now, 180, 5);
+    persist_write_int(VG_SCAN_BUSY_KEY, now + 90);
+    s_hrv_active = health_service_set_hrv_sample_period(1);
     if (s_ekg_layer) layer_set_hidden(s_ekg_layer, false);
     s_scan_ticks = 60;
     memset(s_bpm_samples, 0, sizeof(s_bpm_samples));
-    health_service_set_heart_rate_sample_period(1);
+    s_bpm_requested = health_service_set_heart_rate_sample_period(1);
     if (g_backlight_stay_on) light_enable(true);
     if (!s_unified_timer)
         s_unified_timer = app_timer_register(1000, unified_timer_callback, NULL);
@@ -948,7 +842,14 @@ static void stress_view_load(Window *w) {
 }
 
 static void stress_view_unload(Window *w) {
-    hrv_end(); 
+    if (s_is_scanning || s_is_breathing) hrv_end();
+    s_is_scanning = s_is_breathing = false;
+    health_service_set_heart_rate_sample_period(0);
+    if (s_unified_timer) app_timer_cancel(s_unified_timer);
+    if (s_ekg_timer) app_timer_cancel(s_ekg_timer);
+    s_unified_timer = s_ekg_timer = NULL;
+    if (s_radius_animation) animation_unschedule(s_radius_animation);
+    if (g_backlight_stay_on) light_enable(false);
     audio_engine_stop();
     layer_destroy(s_ekg_layer);
     layer_destroy(s_stress_canvas);
@@ -966,8 +867,6 @@ void ui_stress_init() {
             if (result == bytes) s_hrv_count_history = bytes / sizeof(HRVRecord);
         }
     }
-    int days = 0;
-    hrv_baseline_ms(&days); // Keep worker calibration state synchronized.
     s_stress_window = window_create();
     window_set_window_handlers(s_stress_window, (WindowHandlers){ .load = stress_view_load, .unload = stress_view_unload });
 }

@@ -29,7 +29,8 @@
             "VG_BREATH_STYLE",
             "VG_HAPTIC_LEVEL",
             "VG_BACKLIGHT",
-            "VG_SETTINGS_SAVE"
+            "VG_SETTINGS_SAVE",
+            "VG_ALERTS"
         ],
         "projectType": "native",
         "resources": {

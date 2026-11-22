@@ -1,5 +1,6 @@
 #pragma once
 #include <pebble.h>
+#include "../../shared/watch_health.h"
 
 // ============================================================================
 // --- SECTION 1: PERSISTENCE KEYS ---
@@ -34,6 +35,18 @@ extern int g_stress_comp;
 extern int g_morning_hr_comp;
 extern int g_volume_level;
 extern int g_target_hr;
+extern VGReserve g_reserve;
+extern bool g_activity_available;
+extern int g_today_steps;
+extern unsigned g_readiness_inputs;
+extern int g_rest_hr_baseline;
+extern int g_sleep_inferred_sec, g_sleep_unknown_sec, g_sleep_awake_sec, g_nap_sec;
+extern int g_hr_recovery_minutes;
+extern bool g_hist_legacy[7];
+extern int g_hist_archived[4][7];
+extern bool g_hist_archive_available;
+extern bool g_background_enabled;
+extern bool g_alerts_enabled;
 
 extern uint16_t g_act_map[144];
 extern uint8_t g_stress_map[144];
@@ -77,7 +90,17 @@ void health_engine_init(void);
 void health_engine_deinit(void);
 void health_engine_update_buffers(void);
 void health_engine_calculate_energy(void);
-void health_engine_log_metrics(void);
+void health_engine_refresh_trends(void);
+int health_engine_stress_score(void);
+int health_engine_minute_hr(int index);
+int health_engine_minute_steps(int index);
+bool health_engine_reserve_fresh(time_t now);
+void health_engine_invalidate_history(void);
+void vitalgauge_apply_worker_setting(void);
+void ui_health_views_mark_dirty(void);
+void ui_stress_bpm_update(void);
+int ui_stress_resting_hrv(time_t from, time_t to);
+int ui_stress_hrv_baseline_before(time_t cutoff, int *days);
 
 void config_sync_init(void);
 void config_sync_deinit(void);
@@ -97,6 +120,7 @@ bool ui_hub_is_visible(void);
 
 void ui_stats_init(void);
 void ui_stats_deinit(void);
+void ui_stats_mark_dirty(void);
 void ui_activity_push(void);
 void ui_sleep_push(void);
 void ui_sleep_mark_dirty(void);
@@ -110,9 +134,6 @@ void ui_stress_push(void);
 void ui_stress_mark_dirty(void);
 void ui_stress_hrv_update(void);
 int ui_stress_hrv_baseline(int *days);
-int ui_stress_latest_hrv(void);
-time_t ui_stress_latest_hrv_time(void);
-void ui_stress_start_morning(void);
 void ui_stress_start_automatic(void);
 
 void ui_settings_init(void);

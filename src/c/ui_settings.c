@@ -7,11 +7,13 @@ bool g_dark_mode = false;
 int g_breath_style = 0; 
 int g_haptic_level = 2; 
 bool g_backlight_stay_on = false;
+bool g_background_enabled;
+bool g_alerts_enabled;
 
 static Window *s_settings_window;
 static SimpleMenuLayer *s_simple_menu_layer;
 static SimpleMenuSection s_menu_sections[1];
-static SimpleMenuItem s_menu_items[4];
+static SimpleMenuItem s_menu_items[6];
 
 // ============================================================================
 // --- SECTION 2: MENU CALLBACKS ---
@@ -21,6 +23,9 @@ static void update_menu_subtitles() {
     s_menu_items[1].subtitle = (g_breath_style == 0) ? "4-4-4-4 (Box)" : ((g_breath_style == 1) ? "4-7-8 (Relax)" : "4-8 (Sleep)");
     s_menu_items[2].subtitle = (g_haptic_level == 0) ? "Off" : ((g_haptic_level == 1) ? "Low" : "High");
     s_menu_items[3].subtitle = g_backlight_stay_on ? "Stay On" : "Auto";
+    s_menu_items[4].subtitle = app_worker_is_running() ? "Active" :
+                                    g_background_enabled ? "Requested / inactive" : "Off";
+    s_menu_items[5].subtitle = g_alerts_enabled ? "On (experimental)" : "Off";
     layer_mark_dirty(simple_menu_layer_get_layer(s_simple_menu_layer));
 }
 
@@ -43,6 +48,15 @@ static void menu_select_callback(int index, void *context) {
         case 3:
             g_backlight_stay_on = !g_backlight_stay_on;
             persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
+            break;
+        case 4:
+            g_background_enabled = !g_background_enabled;
+            persist_write_bool(VG_BG_KEY, g_background_enabled);
+            vitalgauge_apply_worker_setting();
+            break;
+        case 5:
+            g_alerts_enabled = !g_alerts_enabled;
+            persist_write_bool(VG_ALERT_OPT_IN_KEY, g_alerts_enabled);
             break;
     }
     update_menu_subtitles();
@@ -72,6 +86,13 @@ static void settings_window_load(Window *window) {
     s_menu_items[num_a_items++] = (SimpleMenuItem) {
         .title = "Scan Backlight",
         .callback = menu_select_callback,
+    };
+
+    s_menu_items[num_a_items++] = (SimpleMenuItem){
+        .title = "Background monitoring", .callback = menu_select_callback
+    };
+    s_menu_items[num_a_items++] = (SimpleMenuItem){
+        .title = "Automatic stress prompts", .callback = menu_select_callback
     };
 
     s_menu_sections[0] = (SimpleMenuSection) {

@@ -22,6 +22,11 @@ module.exports = [
       ] },
     { type: 'toggle', messageKey: 'VG_BACKLIGHT', label: 'Keep backlight on during scans', defaultValue: false }
   ] },
+  { type: 'section', items: [
+    { type: 'heading', defaultValue: 'Monitoring' },
+    { type: 'toggle', messageKey: 'BG_SCAN_ENABLED', label: 'Background monitoring', defaultValue: false },
+    { type: 'toggle', messageKey: 'VG_ALERTS', label: 'Experimental stress prompts (requires background monitoring)', defaultValue: false }
+  ] },
   { type: 'text', defaultValue: 'VitalGauge health processing stays entirely on your Pebble Time 2.' },
   { type: 'submit', defaultValue: 'Save Settings' }
 ];

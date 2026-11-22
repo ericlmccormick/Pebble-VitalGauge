@@ -9,34 +9,27 @@ static Window *s_recovery_window;
 static Layer *s_recovery_layer;
 static uint8_t s_recovery_page;
 static uint8_t s_last_recovery_page;
-static int energy_clamp(int x) { return x < 0 ? 0 : x > 100 ? 100 : x; }
 static void energy_contribution_perimeter(GContext *ctx) {
-    // Draw actual terms of the existing composite energy formula; not an
-    // invented chronology. Green is starting charge, cyan cardiac adjustment,
-    // orange and red mark the portions subtracted from the intermediate score.
-    int base = (g_sleep_comp + g_readiness_comp) / 2;
-    int cardiac = g_card_eff_comp / 10;
-    int before_drain = energy_clamp(base + cardiac);
-    int after_activity = energy_clamp(base + cardiac - g_exertion_comp);
-    int current = energy_clamp(base + cardiac - g_exertion_comp - g_stress_comp);
     draw_perimeter_segment(ctx, 0, 856, 9, GColorLightGray);
-    if (base > 0)
-        draw_perimeter_segment(ctx, 0, energy_clamp(base) * 856 / 100,
-                               9, GColorJaegerGreen);
-    if (cardiac > 0 && before_drain > base)
-        draw_perimeter_segment(ctx, energy_clamp(base) * 856 / 100,
-                               before_drain * 856 / 100, 9, GColorPictonBlue);
-    if (before_drain > after_activity)
-        draw_perimeter_segment(ctx, after_activity * 856 / 100,
-                               before_drain * 856 / 100, 9, GColorOrange);
-    if (after_activity > current)
-        draw_perimeter_segment(ctx, current * 856 / 100,
-                               after_activity * 856 / 100, 9, GColorRed);
-    GPoint point = get_perimeter_point(current * 856 / 100, 9);
+    if (g_live_energy_score < 0) return;
+    const int changes[] = {g_reserve.recovery, g_reserve.cardiac,
+                           g_reserve.activity, g_reserve.stress};
+    const GColor colors[] = {GColorJaegerGreen, GColorPictonBlue, GColorOrange, GColorRed};
+    int cursor = g_reserve.start_units;
+    if (cursor > 0)
+        draw_perimeter_segment(ctx, 0, cursor * 856 / 10000, 9, GColorDarkGray);
+    for (unsigned i = 0; i < ARRAY_LENGTH(changes); ++i) {
+        int next = vg_clamp(cursor + changes[i], 0, 10000);
+        int first = cursor < next ? cursor : next;
+        int last = cursor > next ? cursor : next;
+        if (first != last)
+            draw_perimeter_segment(ctx, first * 856 / 10000, last * 856 / 10000, 9, colors[i]);
+        cursor = next;
+    }
+    GPoint point = get_perimeter_point(g_reserve.units * 856 / 10000, 9);
     graphics_context_set_fill_color(ctx, vg_foreground());
     graphics_fill_circle(ctx, point, 6);
 }
-
 
 static void recovery_open(void);
 
@@ -108,7 +101,8 @@ static void global_touch_handler(const TouchEvent *event, void *context) {
 }
 
 static void force_sync_handler(ClickRecognizerRef recognizer, void *context) {
-    vibes_double_pulse();
+    if (g_haptic_level) vibes_double_pulse();
+    health_engine_invalidate_history();
     health_engine_update_buffers();
     if (s_hub_drawing_layer) layer_mark_dirty(s_hub_drawing_layer);
 }
@@ -147,12 +141,9 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   graphics_fill_radial(ctx, rect_sleep, GOvalScaleModeFitCircle, ring_thickness, 0, DEG_TO_TRIGANGLE(360));
   graphics_fill_radial(ctx, rect_stress, GOvalScaleModeFitCircle, ring_thickness, 0, DEG_TO_TRIGANGLE(360));
 
-  int steps = (int)health_service_sum_today(HealthMetricStepCount);
-  int step_pct = (steps * 100) / 10000;
-  if (step_pct > 100) step_pct = 100;
-  int sleep_pct = g_sleep_comp;
-  if (sleep_pct > 100) sleep_pct = 100;
-  int stress_val = persist_exists(PERSIST_KEY_SCORE) ? persist_read_int(PERSIST_KEY_SCORE) : 50;
+  int step_pct = vg_clamp(g_today_steps / 100, 0, 100);
+  int sleep_pct = vg_clamp(g_sleep_comp, 0, 100);
+  int stress_val = vg_clamp(health_engine_stress_score(), 0, 100);
 
   graphics_context_set_fill_color(ctx, GColorJaegerGreen);
   graphics_fill_radial(ctx, rect_activity, GOvalScaleModeFitCircle, ring_thickness, 0, DEG_TO_TRIGANGLE((step_pct * 360) / 100));
@@ -184,11 +175,15 @@ static void hub_drawing_render_procedure(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, vg_foreground()); 
   graphics_draw_text(ctx, "Sleep", font, GRect(154, 196, 44, tag_h), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 
-  char energy_text[8];
-  snprintf(energy_text, sizeof(energy_text), "%d", g_live_energy_score); 
+  char energy_text[12];
+  if (g_live_energy_score >= 0) snprintf(energy_text, sizeof(energy_text), "%d", g_live_energy_score);
+  else snprintf(energy_text, sizeof(energy_text), "--");
   graphics_context_set_text_color(ctx, vg_foreground());
   graphics_draw_text(ctx, energy_text, fonts_get_system_font(VG_FONT_NUMBER), 
                      GRect(center_x - 30, center_y - 20, 60, 40), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+  if (g_live_energy_score >= 0 && !health_engine_reserve_fresh(time(NULL)))
+    graphics_draw_text(ctx, "Last", fonts_get_system_font(VG_FONT_HINT),
+                       GRect(75, 127, 50, 17), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
   if (s_hub_focus_visible) {
     graphics_context_set_stroke_color(ctx, vg_foreground());
     graphics_context_set_stroke_width(ctx, 2);
@@ -214,34 +209,57 @@ static void recovery_draw(Layer *layer, GContext *ctx) {
                        GTextAlignmentCenter, NULL);
     int primary = s_recovery_page == 2 ? g_readiness_comp : g_live_energy_score;
     char number[20];
-    snprintf(number, sizeof(number), "%d", primary);
+    if (primary >= 0) snprintf(number, sizeof(number), "%d", primary);
+    else snprintf(number, sizeof(number), "--");
     graphics_draw_text(ctx, number, fonts_get_system_font(VG_FONT_NUMBER),
                        GRect(28, 43, 144, 49), GTextOverflowModeFill,
                        GTextAlignmentCenter, NULL);
     char info[180];
+    time_t now = time(NULL);
     if (s_recovery_page == 0) {
-        int kcal = (int)health_service_sum_today(HealthMetricActiveKCalories);
-        snprintf(info, sizeof(info), "Sleep %d   Ready %d\nActive %d kcal\nStress component %d\nActivity drain %d",
-                 g_sleep_comp, g_readiness_comp, kcal, g_stress_comp, g_exertion_comp);
+        if (g_live_energy_score < 0) {
+            snprintf(info, sizeof(info), "Collecting Health data\nWear the watch to update");
+        } else {
+            time_t observed = g_reserve.observed;
+            struct tm *local = localtime(&observed);
+            char stamp[24] = "--";
+            if (local) strftime(stamp, sizeof(stamp), "%b %d %H:%M", local);
+            snprintf(info, sizeof(info), "%s %s\nBackground %s",
+                     health_engine_reserve_fresh(now) ? "Updated" : "Last reading",
+                     stamp, app_worker_is_running() ? "active" : "inactive");
+        }
     } else if (s_recovery_page == 2) {
         int days = 0;
-        int baseline = ui_stress_hrv_baseline(&days);
-        int latest = ui_stress_latest_hrv();
-        if (latest && baseline)
-            snprintf(info, sizeof(info), "HRV %d ms   Base %d ms\nDifference %+d%%\nRest HR %d bpm\n%d/7 calibration days",
-                     latest, baseline, (latest - baseline) * 100 / baseline,
-                     g_morning_hr_comp, days);
+        int baseline = g_sleep_end ?
+                       ui_stress_hrv_baseline_before(g_sleep_end, &days) :
+                       ui_stress_hrv_baseline(&days);
+        int hrv = ui_stress_resting_hrv(g_sleep_end, g_sleep_end + 2 * 3600);
+        char pulse[32] = "Rest HR unavailable";
+        char variability[38];
+        if (g_morning_hr_comp && g_rest_hr_baseline)
+            snprintf(pulse, sizeof(pulse), "Rest HR %d / base %d", g_morning_hr_comp, g_rest_hr_baseline);
+        else if (g_morning_hr_comp)
+            snprintf(pulse, sizeof(pulse), "Rest HR %d (learning)", g_morning_hr_comp);
+        if (baseline && hrv)
+            snprintf(variability, sizeof(variability), "HRV %d / base %d ms", hrv, baseline);
+        else if (baseline)
+            snprintf(variability, sizeof(variability), "No morning HRV scan");
         else
-            snprintf(info, sizeof(info), "HRV %s\nRest HR %d bpm\nSleep score %d/100\n%d/7 calibration days",
-                     latest ? "Calibrating" : "Unavailable",
-                     g_morning_hr_comp, g_sleep_comp, days);
+            snprintf(variability, sizeof(variability), "HRV calibration %d/7 days", days);
+        snprintf(info, sizeof(info), "%s\n%s\n%s",
+                 g_readiness_comp < 0 ? "Sleep unavailable" :
+                 g_readiness_inputs == 7 ? "Sleep, resting HR and HRV" : "Partial estimate",
+                 pulse, variability);
     } else {
-        int base = (g_sleep_comp + g_readiness_comp) / 2;
-        int cardiac = g_card_eff_comp / 10;
+        char recovery[36] = "Return to baseline: --";
+        if (g_hr_recovery_minutes >= 0)
+            snprintf(recovery, sizeof(recovery), "Return to baseline: %d min", g_hr_recovery_minutes);
         snprintf(info, sizeof(info),
-                 "Recovery %d   Heart %+d\nActivity -%d  Stress -%d\nCurrent reserve %d/100\nComposite, not daily timeline",
-                 base, cardiac, g_exertion_comp, g_stress_comp,
-                 g_live_energy_score);
+                 "Latest update (points)\nSleep +%d.%02d  Activity -%d.%02d\nHR recovery +%d.%02d\nStress -%d.%02d\n%s",
+                 g_reserve.recovery / 100, g_reserve.recovery % 100,
+                 g_exertion_comp / 100, g_exertion_comp % 100,
+                 g_card_eff_comp / 100, g_card_eff_comp % 100,
+                 g_stress_comp / 100, g_stress_comp % 100, recovery);
     }
     graphics_draw_text(ctx, info, fonts_get_system_font(VG_FONT_BODY),
                        GRect(8, 105, 184, 102), GTextOverflowModeWordWrap,
@@ -275,9 +293,7 @@ static void recovery_unload(Window *window) {
     s_recovery_layer = NULL;
 }
 static void recovery_open(void) {
-    time_t now = time(NULL);
     s_recovery_page = s_last_recovery_page;
-    (void)now;
     window_stack_push(s_recovery_window, true);
 }
 
@@ -321,4 +337,11 @@ void ui_hub_mark_dirty() {
 }
 bool ui_hub_is_visible(void) {
     return window_stack_get_top_window() == s_hub_window;
+}
+
+void ui_health_views_mark_dirty(void) {
+    ui_hub_mark_dirty();
+    ui_stats_mark_dirty();
+    ui_stress_mark_dirty();
+    if (s_recovery_layer) layer_mark_dirty(s_recovery_layer);
 }

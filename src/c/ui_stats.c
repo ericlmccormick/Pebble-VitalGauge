@@ -13,7 +13,8 @@ static Layer *s_sleep_canvas;
 static Layer *s_history_canvas;
 static Layer *s_battery_canvas;    
 
-static int s_current_history_view = 0;
+static int s_current_history_view;
+static bool s_archived_history;
 
 // ============================================================================
 // --- SECTION 2: ACTIVITY RENDERER ---
@@ -23,13 +24,22 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
-    int steps = (int)health_service_sum_today(HealthMetricStepCount);
+    int steps = g_today_steps;
     draw_perimeter_segment(ctx, 0, 856, 10, GColorLightGray);
 
     time_t wake_time = (g_sleep_end != 0) ? g_sleep_end : time_start_of_today() + (6 * 3600); 
     time_t now = time(NULL);
     int expected_awake_mins = 16 * 60;
     int c_idle = 0, c_rest = 0, c_light = 0, c_mod = 0, c_max = 0;
+    for (int i = 0; i < 1440; ++i) {
+        if (g_24h_start + i * 60 < wake_time) continue;
+        int minute_steps = health_engine_minute_steps(i);
+        if (minute_steps >= 80) ++c_max;
+        else if (minute_steps >= 40) ++c_mod;
+        else if (minute_steps > 0) ++c_light;
+        else if (minute_steps == 0 && health_engine_minute_hr(i)) ++c_rest;
+        else if (minute_steps == 0) ++c_idle;
+    }
     
     int group_start_p = -1;
     GColor current_c = GColorClear;
@@ -39,12 +49,16 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
         time_t bucket_time = g_24h_start + (b * 600);
         if (bucket_time >= wake_time && bucket_time <= now) {
             uint16_t bucket_steps = g_act_map[b];
+            bool available = false;
+            for (int i = b * 10; i < b * 10 + 10; ++i)
+                if (health_engine_minute_steps(i) >= 0) { available = true; break; }
             GColor c;
             
-            if (bucket_steps >= 800) { c = GColorRed; c_max += 10; } 
-            else if (bucket_steps >= 400) { c = GColorOrange; c_mod += 10; } 
-            else if (bucket_steps > 0) { c = GColorJaegerGreen; c_light += 10; } 
-            else { c = GColorDarkGray; c_idle += 10; }
+            if (!available) c = GColorLightGray;
+            else if (bucket_steps >= 800) c = GColorRed;
+            else if (bucket_steps >= 400) c = GColorOrange;
+            else if (bucket_steps > 0) c = GColorJaegerGreen;
+            else c = GColorDarkGray;
 
             int minute_offset = (bucket_time - wake_time) / 60;
             int p = (minute_offset * 856) / expected_awake_mins;
@@ -78,7 +92,8 @@ static void activity_update_proc(Layer *layer, GContext *ctx) {
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char top_buf[32];
-    snprintf(top_buf, sizeof(top_buf), "Goal: %d%%\n%d Steps", goal_pct, steps);
+    if (g_activity_available) snprintf(top_buf, sizeof(top_buf), "Goal: %d%%\n%d Steps", goal_pct, steps);
+    else snprintf(top_buf, sizeof(top_buf), "Activity unavailable");
     graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
                        GRect(0, 40, 200, 45), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
@@ -176,11 +191,13 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
             int minute_of_day = (min_time - g_24h_start) / 60;
             
             // Verify the index is within the bounds of the 24-hour array
-            if (minute_of_day >= 0 && minute_of_day < 1440) {
+            {
                 // Retrieve the sleep state for this minute
-                uint8_t state = g_sleep_map[minute_of_day];
+                uint8_t state = minute_of_day >= 0 && minute_of_day < 1440 ? g_sleep_map[minute_of_day] : 0;
                 // Assign DukeBlue for deep, PictonBlue for light, Red for awake
-                GColor c = (state == 2) ? GColorDukeBlue : ((state == 1) ? GColorPictonBlue : ((state == 3) ? GColorPictonBlue : GColorRed));
+                const GColor stages[] = {GColorLightGray, GColorPictonBlue, GColorDukeBlue,
+                                         GColorVividViolet, GColorRed};
+                GColor c = stages[state];
                 // Map the minute sequence mathematically to the physical perimeter
                 int p = (m * max_p) / total_sleep_mins;
 
@@ -228,69 +245,32 @@ static void sleep_update_proc(Layer *layer, GContext *ctx) {
     // Initialize buffer for the top readout block, expanded to 128 to prevent string truncation
     char top_buf[128];
     // Format the primary metrics into the display string
-    snprintf(top_buf, sizeof(top_buf), "Sleep: %d | Ready: %d\n%s - %s\nMorn HR: %d BPM", 
-             g_sleep_comp, g_readiness_comp, sleep_start_str, sleep_end_str, g_morning_hr_comp);
-    // Draw the formatted top readout block
     if (!g_sleep_data_available) {
-        snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\nCheck Pebble Health sync");
+        snprintf(top_buf, sizeof(top_buf), "Sleep data unavailable\nCheck Pebble Health");
+    } else {
+        snprintf(top_buf, sizeof(top_buf), "Main sleep %d/100\n%s - %s",
+                 g_sleep_comp, sleep_start_str, sleep_end_str);
     }
-    graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY), 
-                       GRect(0, 38, 200, 60), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-
-    // Calculate total net sleep in seconds
-    int net_sleep_sec = g_sleep_deep_sec + g_sleep_light_sec;
-    // Calculate total awake seconds by subtracting net sleep from gross duration
-    int awake_sec = g_longest_sleep_duration - net_sleep_sec;
-    // Boundary limit to prevent illogical negative outputs
-    if (awake_sec < 0) awake_sec = 0;
-
-    // Define the vertical starting coordinate for the stats list
-    int y_start = 100;
-    // Define the vertical spacing between list items
-    int y_step = 22;
-    // Define the horizontal coordinate for the color indicator squares
-    int x_sq = 45;
-    // Define the horizontal coordinate for the text labels
-    int x_txt = 65;
-    // Load the standard font for the list rows
-    GFont row_font = fonts_get_system_font(VG_FONT_BODY);
-    
-    // Set context color to deep blue for deep sleep indicator
-    graphics_context_set_fill_color(ctx, GColorDukeBlue);
-    // Draw the deep sleep color square
-    graphics_fill_rect(ctx, GRect(x_sq, y_start + 6, 10, 10), 0, GCornerNone);
-    // Initialize string buffer for deep sleep duration
-    char buf_deep[32];
-    // Format the deep sleep duration into hours and minutes
-    snprintf(buf_deep, sizeof(buf_deep), "Restful: %dh %dm", g_sleep_deep_sec / 3600, (g_sleep_deep_sec % 3600) / 60);
-    // Draw the formatted deep sleep string
-    graphics_draw_text(ctx, buf_deep, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-    // Increment the vertical position for the next row
-    y_start += y_step;
-    
-    // Set context color to light blue for light sleep indicator
-    graphics_context_set_fill_color(ctx, GColorPictonBlue);
-    // Draw the light sleep color square
-    graphics_fill_rect(ctx, GRect(x_sq, y_start + 6, 10, 10), 0, GCornerNone);
-    // Initialize string buffer for light sleep duration
-    char buf_light[32];
-    // Format the light sleep duration into hours and minutes
-    snprintf(buf_light, sizeof(buf_light), "Light: %dh %dm", g_sleep_light_sec / 3600, (g_sleep_light_sec % 3600) / 60);
-    // Draw the formatted light sleep string
-    graphics_draw_text(ctx, buf_light, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-    // Increment the vertical position for the next row
-    y_start += y_step;
-    
-    // Set context color to red for awake indicator
-    graphics_context_set_fill_color(ctx, GColorRed);
-    // Draw the awake color square
-    graphics_fill_rect(ctx, GRect(x_sq, y_start + 6, 10, 10), 0, GCornerNone);
-    // Initialize string buffer for awake duration
-    char buf_awake[32];
-    // Format the awake duration into minutes
-    snprintf(buf_awake, sizeof(buf_awake), "Awake: %dm", awake_sec / 60);
-    // Draw the formatted awake string
-    graphics_draw_text(ctx, buf_awake, row_font, GRect(x_txt, y_start, 135, 20), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+    graphics_draw_text(ctx, top_buf, fonts_get_system_font(VG_FONT_BODY),
+                       GRect(0, 38, 200, 48), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+    if (!g_sleep_data_available) return;
+    const GColor colors[] = {GColorDukeBlue, GColorPictonBlue, GColorVividViolet,
+                             GColorRed, GColorLightGray};
+    const char *labels[] = {"Restful", "Other sleep", "Inferred", "Awake", "Unknown", "Naps"};
+    const int seconds[] = {g_sleep_deep_sec, g_sleep_light_sec, g_sleep_inferred_sec,
+                           g_sleep_awake_sec, g_sleep_unknown_sec, g_nap_sec};
+    for (unsigned i = 0; i < ARRAY_LENGTH(labels); ++i) {
+        int y = 86 + i * 20;
+        if (i < ARRAY_LENGTH(colors)) {
+            graphics_context_set_fill_color(ctx, colors[i]);
+            graphics_fill_rect(ctx, GRect(32, y + 6, 10, 10), 0, GCornerNone);
+        }
+        char value[40];
+        snprintf(value, sizeof(value), "%s %dh %02dm", labels[i], seconds[i] / 3600,
+                 seconds[i] / 60 % 60);
+        graphics_draw_text(ctx, value, fonts_get_system_font(VG_FONT_BODY),
+                           GRect(50, y, 135, 21), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    }
 }
 // ============================================================================
 // --- SECTION 4: HISTORY RENDERER ---
@@ -308,6 +288,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
     else if (s_current_history_view == 2) { title = "Stress Trend"; data_arr = g_hist_stress; }
     else if (s_current_history_view == 3) { title = "Activity Trend"; data_arr = g_hist_activity; }
 
+    if (s_archived_history) data_arr = g_hist_archived[s_current_history_view];
     graphics_context_set_text_color(ctx, vg_foreground());
     graphics_draw_text(ctx, title, fonts_get_system_font(VG_FONT_TITLE), 
                        GRect(0, 5, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
@@ -318,7 +299,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
 
     for(int i = 0; i < 7; i++) {
         int val = data_arr[i];
-        if (val > 0 || i == 6) { sum += val; valid_days++; }
+        if (val >= 0 && (s_archived_history || !g_hist_legacy[i])) { sum += val; valid_days++; }
 
         int h = (val * max_h) / 100;
         if (h < 2) h = 2;
@@ -333,6 +314,7 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
             else c = GColorRed;
         }
 
+        if (val < 0 || (!s_archived_history && g_hist_legacy[i])) c = GColorLightGray;
         int x = start_x + (i * (bar_w + spacing));
         int y = base_y - h;
 
@@ -340,7 +322,9 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
         graphics_fill_rect(ctx, GRect(x, y, bar_w, h), 2, GCornersAll);
 
         char day_lbl[4];
-        if (i == 6) snprintf(day_lbl, sizeof(day_lbl), "T");
+        if (s_archived_history) snprintf(day_lbl, sizeof(day_lbl), "%d", i + 1);
+        else if (g_hist_legacy[i]) snprintf(day_lbl, sizeof(day_lbl), "*");
+        else if (i == 6) snprintf(day_lbl, sizeof(day_lbl), "T");
         else snprintf(day_lbl, sizeof(day_lbl), "-%d", 6-i);
 
         graphics_context_set_text_color(ctx, vg_foreground());
@@ -350,12 +334,16 @@ static void history_update_proc(Layer *layer, GContext *ctx) {
 
     int avg = valid_days > 0 ? sum / valid_days : 0;
     char avg_buf[32];
-    snprintf(avg_buf, sizeof(avg_buf), "7-Day Avg: %d", avg);
+    if (s_archived_history) snprintf(avg_buf, sizeof(avg_buf), "Prior scoring");
+    else if (valid_days) snprintf(avg_buf, sizeof(avg_buf), "7-day avg %d (%d days)", avg, valid_days);
+    else snprintf(avg_buf, sizeof(avg_buf), "No current readings");
     graphics_draw_text(ctx, avg_buf, fonts_get_system_font(VG_FONT_BODY),
                        GRect(0, 42, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     graphics_context_set_text_color(ctx, vg_foreground());
-    graphics_draw_text(ctx, "UP/DOWN  Browse     BACK  Return", fonts_get_system_font(VG_FONT_HINT), 
+    const char *footer = s_archived_history ? "SELECT Current   UP/DOWN Browse" :
+                         g_hist_archive_available ? "SELECT Archive   * Prior scoring" : "UP/DOWN Browse";
+    graphics_draw_text(ctx, footer, fonts_get_system_font(VG_FONT_HINT),
                        GRect(0, 185, 200, 20), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
@@ -367,7 +355,7 @@ static void battery_update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_fill_color(ctx, vg_background());
     graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 
-    int p_end = (g_live_energy_score * 856) / 100;
+    int p_end = vg_clamp(g_live_energy_score, 0, 100) * 856 / 100;
     GColor c = (g_live_energy_score > 60) ? GColorJaegerGreen : (g_live_energy_score > 30 ? GColorChromeYellow : GColorRed);
     
     draw_perimeter_segment(ctx, 0, 856, 10, GColorLightGray);
@@ -381,13 +369,15 @@ static void battery_update_proc(Layer *layer, GContext *ctx) {
                        GRect(0, 5, 200, 30), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char pct_buf[16];
-    snprintf(pct_buf, sizeof(pct_buf), "%d%%", g_live_energy_score);
+    if (g_live_energy_score >= 0) snprintf(pct_buf, sizeof(pct_buf), "%d%%", g_live_energy_score);
+    else snprintf(pct_buf, sizeof(pct_buf), "--");
     graphics_draw_text(ctx, pct_buf, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), 
                        GRect(0, 35, 200, 35), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 
     char buf[160];
-    snprintf(buf, sizeof(buf), "+ Sleep Score: %d\n+ Readiness Score: %d\n+ Cardiac Efficiency: %d\n- Exertion Drain: %d\n- Stress Penalty: %d", 
-             g_sleep_comp, g_readiness_comp, g_card_eff_comp / 10, g_exertion_comp, g_stress_comp);
+    snprintf(buf, sizeof(buf), "%s\nSleep %+.2d  HR recovery %+.2d\nActivity -%d  Stress -%d\nValues in hundredths of a point",
+             health_engine_reserve_fresh(time(NULL)) ? "Latest update" : "Awaiting Health data",
+             g_reserve.recovery, g_reserve.cardiac, g_exertion_comp, g_stress_comp);
 
     graphics_draw_text(ctx, buf, fonts_get_system_font(VG_FONT_BODY), 
                        GRect(5, 75, 190, 150), GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
@@ -409,26 +399,28 @@ static void history_down_handler(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void history_select_handler(ClickRecognizerRef recognizer, void *context) {
-    window_stack_pop(true);
+    if (!g_hist_archive_available) return;
+    s_archived_history = !s_archived_history;
+    layer_mark_dirty(s_history_canvas);
 }
 
 static void history_click_config_provider(void *context) {
     window_single_click_subscribe(BUTTON_ID_UP, history_up_handler);
     window_single_click_subscribe(BUTTON_ID_DOWN, history_down_handler);
-    window_single_click_subscribe(BUTTON_ID_BACK, history_select_handler);
+    window_single_click_subscribe(BUTTON_ID_SELECT, history_select_handler);
 }
 
 static void act_load(Window *w) { s_activity_canvas = layer_create(layer_get_bounds(window_get_root_layer(w))); layer_set_update_proc(s_activity_canvas, activity_update_proc); layer_add_child(window_get_root_layer(w), s_activity_canvas); }
-static void act_unload(Window *w) { layer_destroy(s_activity_canvas); }
+static void act_unload(Window *w) { layer_destroy(s_activity_canvas); s_activity_canvas = NULL; }
 
 static void slp_load(Window *w) { s_sleep_canvas = layer_create(layer_get_bounds(window_get_root_layer(w))); layer_set_update_proc(s_sleep_canvas, sleep_update_proc); layer_add_child(window_get_root_layer(w), s_sleep_canvas); }
-static void slp_unload(Window *w) { layer_destroy(s_sleep_canvas); }
+static void slp_unload(Window *w) { layer_destroy(s_sleep_canvas); s_sleep_canvas = NULL; }
 
 static void his_load(Window *w) { s_history_canvas = layer_create(layer_get_bounds(window_get_root_layer(w))); layer_set_update_proc(s_history_canvas, history_update_proc); layer_add_child(window_get_root_layer(w), s_history_canvas); window_set_click_config_provider(w, history_click_config_provider); }
-static void his_unload(Window *w) { layer_destroy(s_history_canvas); }
+static void his_unload(Window *w) { layer_destroy(s_history_canvas); s_history_canvas = NULL; }
 
 static void bat_load(Window *w) { s_battery_canvas = layer_create(layer_get_bounds(window_get_root_layer(w))); layer_set_update_proc(s_battery_canvas, battery_update_proc); layer_add_child(window_get_root_layer(w), s_battery_canvas); }
-static void bat_unload(Window *w) { layer_destroy(s_battery_canvas); }
+static void bat_unload(Window *w) { layer_destroy(s_battery_canvas); s_battery_canvas = NULL; }
 
 void ui_stats_init() {
     s_activity_window = window_create(); window_set_window_handlers(s_activity_window, (WindowHandlers){ .load = act_load, .unload = act_unload }); window_set_background_color(s_activity_window, vg_background());
@@ -455,4 +447,10 @@ void ui_battery_push() { window_stack_push(s_battery_window, true); }
 
 void ui_battery_mark_dirty() {
     if (s_battery_canvas && window_is_loaded(s_battery_window)) layer_mark_dirty(s_battery_canvas);
+}
+void ui_stats_mark_dirty(void) {
+    if (s_activity_canvas) layer_mark_dirty(s_activity_canvas);
+    if (s_history_canvas) layer_mark_dirty(s_history_canvas);
+    ui_sleep_mark_dirty();
+    ui_battery_mark_dirty();
 }

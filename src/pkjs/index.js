@@ -2,8 +2,8 @@ var Clay = require('pebble-clay');
 var keys = require('message_keys');
 var baseConfig = require('./config');
 var clay = new Clay(baseConfig, null, { autoHandleEvents: false });
-var fields = ['VG_DARK_MODE', 'VG_BREATH_STYLE', 'VG_HAPTIC_LEVEL', 'VG_BACKLIGHT'];
-var defaults = { VG_DARK_MODE: 0, VG_BREATH_STYLE: 0, VG_HAPTIC_LEVEL: 2, VG_BACKLIGHT: 0 };
+var fields = ['VG_DARK_MODE', 'VG_BREATH_STYLE', 'VG_HAPTIC_LEVEL', 'VG_BACKLIGHT', 'BG_SCAN_ENABLED', 'VG_ALERTS'];
+var defaults = { VG_DARK_MODE: 0, VG_BREATH_STYLE: 0, VG_HAPTIC_LEVEL: 2, VG_BACKLIGHT: 0, BG_SCAN_ENABLED: 0, VG_ALERTS: 0 };
 var settings = {};
 fields.forEach(function(name) {
   var stored = localStorage.getItem('vg_' + name);

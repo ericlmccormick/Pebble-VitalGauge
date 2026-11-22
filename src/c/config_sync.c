@@ -15,6 +15,8 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     Tuple *dark = dict_find(iter, MESSAGE_KEY_VG_DARK_MODE);
     Tuple *breath = dict_find(iter, MESSAGE_KEY_VG_BREATH_STYLE);
     Tuple *haptic = dict_find(iter, MESSAGE_KEY_VG_HAPTIC_LEVEL);
+    Tuple *background = dict_find(iter, MESSAGE_KEY_BG_SCAN_ENABLED);
+    Tuple *alerts = dict_find(iter, MESSAGE_KEY_VG_ALERTS);
     Tuple *backlight = dict_find(iter, MESSAGE_KEY_VG_BACKLIGHT);
 
     if (dark && dark->value->int32 <= 1) {
@@ -38,6 +40,15 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
         g_backlight_stay_on = backlight->value->int32 != 0;
         persist_write_bool(PERSIST_KEY_BACKLIGHT, g_backlight_stay_on);
     }
+    if (background && background->value->uint32 <= 1) {
+        g_background_enabled = background->value->uint32 != 0;
+        persist_write_bool(VG_BG_KEY, g_background_enabled);
+        vitalgauge_apply_worker_setting();
+    }
+    if (alerts && alerts->value->uint32 <= 1) {
+        g_alerts_enabled = alerts->value->uint32 != 0;
+        persist_write_bool(VG_ALERT_OPT_IN_KEY, g_alerts_enabled);
+    }
 }
 
 void config_sync_init(void) {
@@ -54,6 +65,8 @@ void config_sync_init(void) {
     g_breath_style = persist_exists(PERSIST_KEY_BREATH_STYLE) ? persist_read_int(PERSIST_KEY_BREATH_STYLE) : 0;
     g_haptic_level = persist_exists(PERSIST_KEY_HAPTIC_LEVEL) ? persist_read_int(PERSIST_KEY_HAPTIC_LEVEL) : 2;
     g_backlight_stay_on = persist_exists(PERSIST_KEY_BACKLIGHT) ? persist_read_bool(PERSIST_KEY_BACKLIGHT) : false;
+    g_background_enabled = persist_exists(VG_BG_KEY) && persist_read_bool(VG_BG_KEY);
+    g_alerts_enabled = persist_exists(VG_ALERT_OPT_IN_KEY) && persist_read_bool(VG_ALERT_OPT_IN_KEY);
     app_message_register_inbox_received(inbox_received);
 }
 
@@ -68,5 +81,7 @@ void config_sync_send_settings(void) {
     dict_write_int32(iter, MESSAGE_KEY_VG_BREATH_STYLE, g_breath_style);
     dict_write_int32(iter, MESSAGE_KEY_VG_HAPTIC_LEVEL, g_haptic_level);
     dict_write_int32(iter, MESSAGE_KEY_VG_BACKLIGHT, g_backlight_stay_on ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_BG_SCAN_ENABLED, g_background_enabled ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_VG_ALERTS, g_alerts_enabled ? 1 : 0);
     app_message_outbox_send();
 }

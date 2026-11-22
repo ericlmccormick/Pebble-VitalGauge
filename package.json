@@ -14,6 +14,11 @@
                 "name": "Health",
                 "reason": "Show activity, sleep, heart rate, and recovery on your watch",
                 "required": false
+            },
+            {
+                "name": "Location",
+                "reason": "Read sunrise and sunset from your Pebble weather source for the Auto theme",
+                "required": false
             }
         ],
         "displayName": "VitalGauge - Advanced Health Monitor ",
@@ -30,7 +35,12 @@
             "VG_HAPTIC_LEVEL",
             "VG_BACKLIGHT",
             "VG_SETTINGS_SAVE",
-            "VG_ALERTS"
+            "VG_ALERTS",
+            "VG_THEME_REQUEST",
+            "VG_SUNRISE",
+            "VG_SUNSET",
+            "VG_NEXT_SUNRISE",
+            "VG_NEXT_SUNSET"
         ],
         "projectType": "native",
         "resources": {

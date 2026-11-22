@@ -5,10 +5,24 @@
 // A stale AppSync/Clay replay without the marker cannot modify watch preferences.
 #define VG_SAVE_MARKER 0x5647
 
+static VGSolarDay solar_tuple(DictionaryIterator *iter, uint32_t rise_key, uint32_t set_key) {
+    const Tuple *rise = dict_find(iter, rise_key);
+    const Tuple *set = dict_find(iter, set_key);
+    if (!rise || !set || rise->length != 4 || set->length != 4 ||
+        (rise->type != TUPLE_INT && rise->type != TUPLE_UINT) ||
+        (set->type != TUPLE_INT && set->type != TUPLE_UINT))
+        return (VGSolarDay){0};
+    return (VGSolarDay){rise->value->int32, set->value->int32};
+}
+
 static void inbox_received(DictionaryIterator *iter, void *context) {
+    if (dict_find(iter, MESSAGE_KEY_VG_THEME_REQUEST)) config_sync_send_settings();
+    VGSolarDay today = solar_tuple(iter, MESSAGE_KEY_VG_SUNRISE, MESSAGE_KEY_VG_SUNSET);
+    VGSolarDay tomorrow = solar_tuple(iter, MESSAGE_KEY_VG_NEXT_SUNRISE, MESSAGE_KEY_VG_NEXT_SUNSET);
+    if (vg_solar_day_valid(today) || vg_solar_day_valid(tomorrow))
+        theme_cache_solar(today, tomorrow);
     Tuple *save = dict_find(iter, MESSAGE_KEY_VG_SETTINGS_SAVE);
     if (!save || (int32_t)save->value->int32 != VG_SAVE_MARKER) {
-        APP_LOG(APP_LOG_LEVEL_DEBUG, "Ignoring unsolicited settings message");
         return;
     }
 
@@ -19,15 +33,8 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     Tuple *alerts = dict_find(iter, MESSAGE_KEY_VG_ALERTS);
     Tuple *backlight = dict_find(iter, MESSAGE_KEY_VG_BACKLIGHT);
 
-    if (dark && dark->value->int32 <= 1) {
-        g_dark_mode = dark->value->int32 != 0;
-        int result = persist_write_int(PERSIST_KEY_DARK_MODE, g_dark_mode ? 1 : 0);
-        APP_LOG(APP_LOG_LEVEL_INFO, "Explicit phone dark mode save=%d persisted=%d",
-                g_dark_mode, result);
-        ui_hub_mark_dirty();
-        ui_stress_mark_dirty();
-        ui_sleep_mark_dirty();
-    }
+    if (dark && dark->length == 4 && (dark->type == TUPLE_INT || dark->type == TUPLE_UINT))
+        theme_set_mode(dark->value->int32);
     if (breath && breath->value->int32 <= 2) {
         g_breath_style = breath->value->int32;
         persist_write_int(PERSIST_KEY_BREATH_STYLE, g_breath_style);
@@ -55,13 +62,6 @@ void config_sync_init(void) {
     if (persist_exists(PERSIST_KEY_VOLUME)) { 
         g_volume_level = persist_read_int(PERSIST_KEY_VOLUME);
     }
-    // Read the legacy bool format (1 byte) or the new integer format (4 bytes).
-    int dark_size = persist_get_size(PERSIST_KEY_DARK_MODE);
-    g_dark_mode = dark_size == (int)sizeof(int32_t)
-        ? persist_read_int(PERSIST_KEY_DARK_MODE) != 0
-        : dark_size == (int)sizeof(bool)
-            ? persist_read_bool(PERSIST_KEY_DARK_MODE) : false;
-    APP_LOG(APP_LOG_LEVEL_INFO, "Dark mode startup: value=%d persisted_size=%d", g_dark_mode, dark_size);
     g_breath_style = persist_exists(PERSIST_KEY_BREATH_STYLE) ? persist_read_int(PERSIST_KEY_BREATH_STYLE) : 0;
     g_haptic_level = persist_exists(PERSIST_KEY_HAPTIC_LEVEL) ? persist_read_int(PERSIST_KEY_HAPTIC_LEVEL) : 2;
     g_backlight_stay_on = persist_exists(PERSIST_KEY_BACKLIGHT) ? persist_read_bool(PERSIST_KEY_BACKLIGHT) : false;
@@ -77,7 +77,7 @@ void config_sync_deinit(void) {
 void config_sync_send_settings(void) {
     DictionaryIterator *iter;
     if (app_message_outbox_begin(&iter) != APP_MSG_OK || !iter) return;
-    dict_write_int32(iter, MESSAGE_KEY_VG_DARK_MODE, g_dark_mode ? 1 : 0);
+    dict_write_int32(iter, MESSAGE_KEY_VG_DARK_MODE, g_theme_mode);
     dict_write_int32(iter, MESSAGE_KEY_VG_BREATH_STYLE, g_breath_style);
     dict_write_int32(iter, MESSAGE_KEY_VG_HAPTIC_LEVEL, g_haptic_level);
     dict_write_int32(iter, MESSAGE_KEY_VG_BACKLIGHT, g_backlight_stay_on ? 1 : 0);

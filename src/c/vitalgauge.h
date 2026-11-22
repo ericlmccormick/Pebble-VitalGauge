@@ -1,5 +1,6 @@
 #pragma once
 #include <pebble.h>
+#include "theme_schedule.h"
 #include "../../shared/watch_health.h"
 
 // ============================================================================
@@ -65,6 +66,7 @@ extern int g_hist_stress[7];
 extern int g_hist_activity[7];
 
 extern bool g_dark_mode;
+extern VGThemeMode g_theme_mode;
 extern int g_breath_style; // 0: 4-4-4-4, 1: 4-7-8, 2: 4-8
 extern int g_haptic_level; // 0: Off, 1: Low, 2: High
 extern bool g_backlight_stay_on;
@@ -136,6 +138,11 @@ void ui_stress_hrv_update(void);
 int ui_stress_hrv_baseline(int *days);
 void ui_stress_start_automatic(void);
 
+void theme_init(void);
+void theme_refresh(void);
+void theme_set_mode(int mode);
+void theme_cache_solar(VGSolarDay today, VGSolarDay tomorrow);
 void ui_settings_init(void);
+void ui_settings_refresh(void);
 void ui_settings_deinit(void);
 void ui_settings_push(void);

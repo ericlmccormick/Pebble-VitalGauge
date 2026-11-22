@@ -3,7 +3,6 @@
 // ============================================================================
 // --- SECTION 1: SETTINGS UI STATE ---
 // ============================================================================
-bool g_dark_mode = false;
 int g_breath_style = 0; 
 int g_haptic_level = 2; 
 bool g_backlight_stay_on = false;
@@ -18,8 +17,14 @@ static SimpleMenuItem s_menu_items[6];
 // ============================================================================
 // --- SECTION 2: MENU CALLBACKS ---
 // ============================================================================
-static void update_menu_subtitles() {
-    s_menu_items[0].subtitle = g_dark_mode ? "On" : "Off";
+void ui_settings_refresh(void) {
+    if (!s_simple_menu_layer) return;
+    static const char *const theme_names[] = {"Day", "Night", "Auto"};
+    s_menu_items[0].subtitle = theme_names[g_theme_mode];
+    MenuLayer *menu = simple_menu_layer_get_menu_layer(s_simple_menu_layer);
+    menu_layer_set_normal_colors(menu, vg_background(), vg_foreground());
+    menu_layer_set_highlight_colors(menu, vg_foreground(), vg_background());
+    window_set_background_color(s_settings_window, vg_background());
     s_menu_items[1].subtitle = (g_breath_style == 0) ? "4-4-4-4 (Box)" : ((g_breath_style == 1) ? "4-7-8 (Relax)" : "4-8 (Sleep)");
     s_menu_items[2].subtitle = (g_haptic_level == 0) ? "Off" : ((g_haptic_level == 1) ? "Low" : "High");
     s_menu_items[3].subtitle = g_backlight_stay_on ? "Stay On" : "Auto";
@@ -33,9 +38,7 @@ static void menu_select_callback(int index, void *context) {
     if (g_haptic_level > 0) vibes_short_pulse();
     switch (index) {
         case 0:
-            g_dark_mode = !g_dark_mode;
-            int result = persist_write_int(PERSIST_KEY_DARK_MODE, g_dark_mode ? 1 : 0);
-            APP_LOG(APP_LOG_LEVEL_INFO, "Dark mode watch change: %d, persist result: %d", g_dark_mode, result);
+            theme_set_mode((g_theme_mode + 1) % 3);
             break;
         case 1:
             g_breath_style = (g_breath_style + 1) % 3;
@@ -59,7 +62,7 @@ static void menu_select_callback(int index, void *context) {
             persist_write_bool(VG_ALERT_OPT_IN_KEY, g_alerts_enabled);
             break;
     }
-    update_menu_subtitles();
+    ui_settings_refresh();
     config_sync_send_settings();
     // Force a redraw of the main hub so changes (like Dark Mode) apply instantly upon exiting
     ui_hub_mark_dirty();
@@ -72,7 +75,7 @@ static void settings_window_load(Window *window) {
     int num_a_items = 0;
 
     s_menu_items[num_a_items++] = (SimpleMenuItem) {
-        .title = "Dark Mode",
+        .title = "Theme",
         .callback = menu_select_callback,
     };
     s_menu_items[num_a_items++] = (SimpleMenuItem) {
@@ -106,11 +109,12 @@ static void settings_window_load(Window *window) {
     s_simple_menu_layer = simple_menu_layer_create(bounds, window, s_menu_sections, 1, NULL);
     layer_add_child(window_layer, simple_menu_layer_get_layer(s_simple_menu_layer));
     
-    update_menu_subtitles();
+    ui_settings_refresh();
 }
 
 static void settings_window_unload(Window *window) {
     simple_menu_layer_destroy(s_simple_menu_layer);
+    s_simple_menu_layer = NULL;
 }
 
 void ui_settings_init(void) {

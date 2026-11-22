@@ -1,9 +1,10 @@
 var Clay = require('pebble-clay');
 var keys = require('message_keys');
 var baseConfig = require('./config');
+var weatherTheme = require('./theme-weather').create(Pebble, keys);
 var clay = new Clay(baseConfig, null, { autoHandleEvents: false });
 var fields = ['VG_DARK_MODE', 'VG_BREATH_STYLE', 'VG_HAPTIC_LEVEL', 'VG_BACKLIGHT', 'BG_SCAN_ENABLED', 'VG_ALERTS'];
-var defaults = { VG_DARK_MODE: 0, VG_BREATH_STYLE: 0, VG_HAPTIC_LEVEL: 2, VG_BACKLIGHT: 0, BG_SCAN_ENABLED: 0, VG_ALERTS: 0 };
+var defaults = { VG_DARK_MODE: 2, VG_BREATH_STYLE: 0, VG_HAPTIC_LEVEL: 2, VG_BACKLIGHT: 0, BG_SCAN_ENABLED: 0, VG_ALERTS: 0 };
 var settings = {};
 fields.forEach(function(name) {
   var stored = localStorage.getItem('vg_' + name);
@@ -25,7 +26,9 @@ function configWithCurrentValues(items) {
 }
 
 Pebble.addEventListener('ready', function() {
-  console.log('VitalGauge phone configuration ready.');
+  var request = {};
+  request[keys.VG_THEME_REQUEST] = 1;
+  Pebble.sendAppMessage(request);
 });
 
 Pebble.addEventListener('appmessage', function(e) {
@@ -37,6 +40,7 @@ Pebble.addEventListener('appmessage', function(e) {
       if (isNaN(value)) return;
       settings[name] = value;
       localStorage.setItem('vg_' + name, String(value));
+      if (name === 'VG_DARK_MODE') weatherTheme.setAuto(value === 2);
     }
   });
 });
@@ -71,6 +75,8 @@ Pebble.addEventListener('webviewclosed', function(e) {
         localStorage.setItem('vg_' + name, String(dict[key]));
       }
     });
+    if (dict.hasOwnProperty(keys.VG_DARK_MODE))
+      weatherTheme.setAuto(settings.VG_DARK_MODE === 2);
     console.log('VitalGauge settings delivered.');
   }, function(error) {
     console.log('VitalGauge settings delivery failed: ' + JSON.stringify(error));

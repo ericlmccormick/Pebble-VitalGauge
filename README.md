@@ -6,13 +6,18 @@ VitalGauge is a watch-local health and guided-breathing app. Health processing s
 
 ## Using VitalGauge
 
-Open the app to view health-related status and available monitoring screens. Hold **Select** for watch-side settings; the Pebble phone app also provides settings. Current options include dark mode, haptic intensity (off/low/high), scan backlight, and breathing patterns:
+Open the app to view health-related status and available monitoring screens. Hold **Select** for watch-side settings; the Pebble phone app also provides settings. Current options include Day, Night and Auto themes, haptic intensity (off/low/high), scan backlight, and breathing patterns:
 
 - Box: 4–4–4–4
 - Relax: 4–7–8
 - Sleep: 4–8
 
 Health-derived values depend on available watch sensor history and are **wellness indicators, not medical diagnostics**.
+
+Auto uses Weather+ first and the Pebble Weather source when Weather+ is unavailable.
+VitalGauge stores the current and next day's sunrise and sunset on the watch for offline launches.
+When the watch has no usable times for the current date, Auto uses 7 a.m.–7 p.m. local time.
+Day and Night can be selected in either the watch or phone settings.
 
 ## Health estimates
 

@@ -33,6 +33,7 @@ static void health_event_cb(HealthEventType event, void *context) {
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
+    theme_refresh();
     if (!s_health_refresh_timer && time(NULL) - s_last_refresh >= 5 * 60)
         schedule_refresh(100);
     else if (!s_health_refresh_timer) {
@@ -65,6 +66,7 @@ static void app_glance_callback(AppGlanceReloadSession *session, size_t limit, v
 }
 
 static void init(void) {
+    theme_init();
     app_message_open(512, 512);
     config_sync_init();
     health_engine_init();

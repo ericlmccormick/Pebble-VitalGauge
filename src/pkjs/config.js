@@ -4,7 +4,13 @@ module.exports = [
   { type: 'text', defaultValue: 'These options also remain available on the watch by holding Select.' },
   { type: 'section', items: [
     { type: 'heading', defaultValue: 'Appearance' },
-    { type: 'toggle', messageKey: 'VG_DARK_MODE', label: 'Dark mode', defaultValue: false }
+    { type: 'select', messageKey: 'VG_DARK_MODE', label: 'Theme', defaultValue: '2',
+      description: 'Auto follows sunrise and sunset from your Pebble weather source.',
+      options: [
+        { label: 'Day', value: '0' },
+        { label: 'Night', value: '1' },
+        { label: 'Auto', value: '2' }
+      ] }
   ] },
   { type: 'section', items: [
     { type: 'heading', defaultValue: 'Breathing & Feedback' },
